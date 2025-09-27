@@ -74,6 +74,9 @@ export class FloorplanElement extends LitElement {
 
   config!: FloorplanConfig;
   pageInfos: { [key: string]: FloorplanPageInfo } = {};
+  pageLayers: Record<string, string[]> = {};
+  pageLayerIds: Set<string> = new Set();
+  currentPageName?: string;
   entityInfos: { [key: string]: FloorplanEntityInfo } = {};
   elementInfos: { [key: string]: FloorplanElementInfo } = {};
   cssRules: unknown[] = [];
@@ -2419,6 +2422,55 @@ export class FloorplanElement extends LitElement {
         }
         break;
 
+      case 'set_page_list': {
+        const parsedPageLayers = this.parsePageLayerList(
+          serviceData ?? actionConfig.service_data
+        );
+
+        if (!Object.keys(parsedPageLayers).length) {
+          this.logWarning(
+            'CONFIG',
+            'No valid page entries were provided to floorplan.set_page_list.'
+          );
+          break;
+        }
+
+        this.pageLayers = parsedPageLayers;
+        this.pageLayerIds = new Set<string>();
+        for (const layers of Object.values(parsedPageLayers)) {
+          for (const layerId of layers) {
+            this.pageLayerIds.add(layerId);
+          }
+        }
+        this.currentPageName = undefined;
+        break;
+      }
+
+      case 'set_page': {
+        if (!Object.keys(this.pageLayers).length) {
+          this.logWarning(
+            'FLOORPLAN_ACTION',
+            'No page list available. Call floorplan.set_page_list before floorplan.set_page.'
+          );
+          break;
+        }
+
+        const pageName = this.getPageNameFromServiceData(
+          serviceData ?? actionConfig.service_data
+        );
+
+        if (!pageName) {
+          this.logWarning(
+            'CONFIG',
+            'floorplan.set_page requires a page name to be provided in service data.'
+          );
+          break;
+        }
+
+        this.applyPageLayerVisibility(pageName);
+        break;
+      }
+
       case 'variable_set':
         serviceData = this.getServiceData(
           actionConfig,
@@ -2515,6 +2567,316 @@ export class FloorplanElement extends LitElement {
         // Unknown floorplan service
         break;
     }
+  }
+
+  private parsePageLayerList(raw: unknown): Record<string, string[]> {
+    const pages: Record<string, string[]> = {};
+
+    if (raw === undefined || raw === null) {
+      return pages;
+    }
+
+    const addEntry = (
+      pageName: string | undefined,
+      layersValue: unknown
+    ) => {
+      if (!pageName) {
+        return;
+      }
+
+      const layers = this.normalizeLayerValues(layersValue);
+      if (!layers.length) {
+        return;
+      }
+
+      pages[pageName] = layers;
+    };
+
+    const processEntry = (entry: unknown) => {
+      if (entry === undefined || entry === null) {
+        return;
+      }
+
+      if (typeof entry === 'string') {
+        const trimmed = entry.trim();
+        if (!trimmed.length) {
+          return;
+        }
+
+        const colonIndex = trimmed.indexOf(':');
+        if (colonIndex === -1) {
+          addEntry(trimmed, undefined);
+          return;
+        }
+
+        const pageName = trimmed.slice(0, colonIndex).trim();
+        const layerValue = trimmed.slice(colonIndex + 1).trim();
+        addEntry(pageName, layerValue);
+        return;
+      }
+
+      if (typeof entry === 'object') {
+        const entryObj = entry as Record<string, unknown>;
+        const pageName = this.getEntryPageName(entryObj);
+        const layersValue =
+          entryObj.layers ??
+          entryObj.layer ??
+          entryObj.elements ??
+          entryObj.ids ??
+          entryObj.layer_ids ??
+          entryObj.layers_list;
+        addEntry(pageName, layersValue);
+      }
+    };
+
+    if (typeof raw === 'string') {
+      const trimmed = raw.trim();
+      if (!trimmed.length) {
+        return pages;
+      }
+
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          return this.parsePageLayerList(JSON.parse(trimmed));
+        } catch (err) {
+          this.logWarning(
+            'CONFIG',
+            'Unable to parse string data provided to floorplan.set_page_list.'
+          );
+          return pages;
+        }
+      }
+
+      processEntry(trimmed);
+      return pages;
+    }
+
+    if (Array.isArray(raw)) {
+      raw.forEach(processEntry);
+      return pages;
+    }
+
+    if (typeof raw === 'object') {
+      const rawObj = raw as Record<string, unknown>;
+
+      if (Array.isArray(rawObj.pages)) {
+        rawObj.pages.forEach(processEntry);
+        return pages;
+      }
+
+      if (Array.isArray(rawObj.page_list)) {
+        rawObj.page_list.forEach(processEntry);
+        return pages;
+      }
+
+      if (this.isNumericKeyObject(rawObj)) {
+        Object.keys(rawObj)
+          .sort((a, b) => Number(a) - Number(b))
+          .forEach((key) => processEntry(rawObj[key]));
+        return pages;
+      }
+
+      for (const [pageName, layersValue] of Object.entries(rawObj)) {
+        processEntry({ page: pageName, layers: layersValue });
+      }
+
+      return pages;
+    }
+
+    return pages;
+  }
+
+  private getEntryPageName(entry: Record<string, unknown>): string | undefined {
+    const keys = ['page', 'page_name', 'name', 'id', 'key'];
+    for (const key of keys) {
+      const value = entry[key];
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim();
+      }
+    }
+
+    return undefined;
+  }
+
+  private normalizeLayerValues(layersValue: unknown): string[] {
+    if (layersValue === undefined || layersValue === null) {
+      return [];
+    }
+
+    if (Array.isArray(layersValue)) {
+      const normalized: string[] = [];
+      for (const entry of layersValue) {
+        const value = this.normalizeLayerEntry(entry);
+        if (value) {
+          normalized.push(value);
+        }
+      }
+      return normalized;
+    }
+
+    if (typeof layersValue === 'string') {
+      const trimmed = layersValue.trim();
+      if (!trimmed.length) {
+        return [];
+      }
+
+      if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+        try {
+          return this.normalizeLayerValues(JSON.parse(trimmed));
+        } catch (err) {
+          // Fall back to comma separated values
+        }
+      }
+
+      return trimmed
+        .split(/[,;]/)
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0);
+    }
+
+    if (typeof layersValue === 'object') {
+      const valueObj = layersValue as Record<string, unknown>;
+      if (Array.isArray(valueObj.layers)) {
+        return this.normalizeLayerValues(valueObj.layers);
+      }
+
+      const nestedValue =
+        valueObj.layer ?? valueObj.id ?? valueObj.element ?? valueObj.name;
+
+      if (nestedValue) {
+        return this.normalizeLayerValues(nestedValue);
+      }
+    }
+
+    return [];
+  }
+
+  private normalizeLayerEntry(entry: unknown): string | undefined {
+    if (entry === undefined || entry === null) {
+      return undefined;
+    }
+
+    if (typeof entry === 'string') {
+      const trimmed = entry.trim();
+      return trimmed.length ? trimmed : undefined;
+    }
+
+    if (typeof entry === 'object') {
+      const entryObj = entry as Record<string, unknown>;
+      const keys = ['id', 'layer', 'element', 'name'];
+      for (const key of keys) {
+        const value = entryObj[key];
+        if (typeof value === 'string' && value.trim()) {
+          return value.trim();
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  private isNumericKeyObject(value: Record<string, unknown>): boolean {
+    const keys = Object.keys(value);
+    return (
+      keys.length > 0 && keys.every((key) => /^[0-9]+$/.test(key))
+    );
+  }
+
+  private getPageNameFromServiceData(data: unknown): string | undefined {
+    if (data === undefined || data === null) {
+      return undefined;
+    }
+
+    if (typeof data === 'string') {
+      const trimmed = data.trim();
+      return trimmed.length ? trimmed : undefined;
+    }
+
+    if (typeof data === 'object') {
+      const dataObj = data as Record<string, unknown>;
+      const keys = ['page', 'page_name', 'name', 'id'];
+      for (const key of keys) {
+        const value = dataObj[key];
+        if (typeof value === 'string' && value.trim()) {
+          return value.trim();
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  private applyPageLayerVisibility(pageName: string): void {
+    const layerIds = this.pageLayers[pageName];
+    if (!layerIds || !layerIds.length) {
+      this.logWarning(
+        'FLOORPLAN_ACTION',
+        `No layers configured for page "${pageName}".`
+      );
+      return;
+    }
+
+    if (!this.svg) {
+      this.logWarning(
+        'FLOORPLAN_ACTION',
+        'Unable to change layers because the SVG has not finished loading.'
+      );
+      return;
+    }
+
+    if (!this.pageLayerIds.size) {
+      this.pageLayerIds = new Set<string>();
+      for (const layers of Object.values(this.pageLayers)) {
+        for (const layerId of layers) {
+          this.pageLayerIds.add(layerId);
+        }
+      }
+    }
+
+    const activeLayerSet = new Set(layerIds);
+    this.currentPageName = pageName;
+
+    for (const layerId of this.pageLayerIds) {
+      const layerElements = this.getLayerElementsById(layerId);
+      if (!layerElements.length) {
+        this.logWarning(
+          'FLOORPLAN_ACTION',
+          `Layer "${layerId}" from page "${pageName}" was not found in the SVG.`
+        );
+      }
+
+      for (const element of layerElements) {
+        if (element.dataset['floorplanOriginalDisplay'] === undefined) {
+          element.dataset['floorplanOriginalDisplay'] =
+            element.style.display || '';
+        }
+
+        if (activeLayerSet.has(layerId)) {
+          const originalDisplay =
+            element.dataset['floorplanOriginalDisplay'] ?? '';
+          if (originalDisplay) {
+            element.style.display = originalDisplay;
+          } else {
+            element.style.removeProperty('display');
+          }
+          element.classList.remove('floorplan-layer-hidden');
+        } else {
+          element.style.display = 'none';
+          element.classList.add('floorplan-layer-hidden');
+        }
+      }
+    }
+  }
+
+  private getLayerElementsById(layerId: string): SVGGraphicsElement[] {
+    if (!this.svg) {
+      return [];
+    }
+
+    const selector = `#${layerId.replace(/\./g, '\\.')}`;
+    return this._querySelectorAll(this.svg, selector, false).map(
+      (element) => element as SVGGraphicsElement
+    );
   }
 
   getActionValue(
