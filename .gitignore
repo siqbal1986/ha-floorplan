@@ -101,7 +101,7 @@ stats.json
 dist_local
 
 # Ignore dist folder
-dist
+# dist
 
 # MacOS
 .DS_Store
