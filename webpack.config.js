@@ -1,4 +1,5 @@
 import path from 'path';
+import { promises as fs } from 'fs';
 import { fileURLToPath } from 'url';
 import TerserPlugin from 'terser-webpack-plugin';
 import CopyPlugin from 'copy-webpack-plugin';
@@ -12,6 +13,42 @@ const __dirname = path.dirname(__filename);
 
 export default (env) => {
   const isProduction = env.production;
+
+  class CopyFloorplanToRootPlugin {
+    constructor({ filename, destinationDir }) {
+      this.filename = filename;
+      this.destinationDir = destinationDir;
+    }
+
+    apply(compiler) {
+      compiler.hooks.afterEmit.tapPromise(
+        'CopyFloorplanToRootPlugin',
+        async (compilation) => {
+          const outputPath = compiler.options.output?.path;
+
+          if (!outputPath) {
+            compilation.warnings.push(
+              new Error('CopyFloorplanToRootPlugin: Unable to resolve output path.')
+            );
+            return;
+          }
+
+          const sourcePath = path.resolve(outputPath, this.filename);
+          const destinationPath = path.resolve(this.destinationDir, this.filename);
+
+          try {
+            await fs.copyFile(sourcePath, destinationPath);
+          } catch (error) {
+            compilation.warnings.push(
+              new Error(
+                `CopyFloorplanToRootPlugin: Failed to copy ${this.filename} to project root. ${error.message}`
+              )
+            );
+          }
+        }
+      );
+    }
+  }
 
   const plugins = isProduction
     ? [
@@ -27,6 +64,10 @@ export default (env) => {
           options: {
             concurrency: 100, // Workaround to ensure copying is done after the build
           },
+        }),
+        new CopyFloorplanToRootPlugin({
+          filename: 'floorplan.js',
+          destinationDir: __dirname,
         }),
       ]
     : [];
