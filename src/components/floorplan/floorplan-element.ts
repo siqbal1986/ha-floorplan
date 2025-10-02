@@ -2423,14 +2423,28 @@ export class FloorplanElement extends LitElement {
         break;
 
       case 'set_page_list': {
+        const setPageListServiceData =
+          serviceData ?? actionConfig.service_data;
+        console.log(
+          '[floorplan.set_page_list] Incoming service data:',
+          setPageListServiceData
+        );
+
         const parsedPageLayers = this.parsePageLayerList(
-          serviceData ?? actionConfig.service_data
+          setPageListServiceData
+        );
+        console.log(
+          '[floorplan.set_page_list] Parsed page layers:',
+          parsedPageLayers
         );
 
         if (!Object.keys(parsedPageLayers).length) {
           this.logWarning(
             'CONFIG',
             'No valid page entries were provided to floorplan.set_page_list.'
+          );
+          console.log(
+            '[floorplan.set_page_list] No valid page entries detected.'
           );
           break;
         }
@@ -2452,21 +2466,35 @@ export class FloorplanElement extends LitElement {
             'FLOORPLAN_ACTION',
             'No page list available. Call floorplan.set_page_list before floorplan.set_page.'
           );
+          console.log(
+            '[floorplan.set_page] Missing page list. Current pageLayers:',
+            this.pageLayers
+          );
           break;
         }
 
-        const pageName = this.getPageNameFromServiceData(
-          serviceData ?? actionConfig.service_data
+        const setPageServiceData = serviceData ?? actionConfig.service_data;
+        console.log(
+          '[floorplan.set_page] Incoming service data:',
+          setPageServiceData
         );
+
+        const pageName = this.getPageNameFromServiceData(setPageServiceData);
+        console.log('[floorplan.set_page] Resolved page name:', pageName);
 
         if (!pageName) {
           this.logWarning(
             'CONFIG',
             'floorplan.set_page requires a page name to be provided in service data.'
           );
+          console.log('[floorplan.set_page] No page name provided.');
           break;
         }
 
+        console.log(
+          '[floorplan.set_page] Applying page layer visibility for page:',
+          pageName
+        );
         this.applyPageLayerVisibility(pageName);
         break;
       }
