@@ -8,6 +8,16 @@ import {
 } from '../jest-floorplan-utils';
 import { retry } from '../jest-common-utils';
 import { jest } from '@jest/globals';
+import fs from 'fs';
+import path from 'path';
+import yaml from 'js-yaml';
+import { Utils } from '../../../src/lib/utils';
+
+const indentYaml = (value: string, spaces = 2): string =>
+  value
+    .split('\n')
+    .map((line) => (line ? `${' '.repeat(spaces)}${line}` : line))
+    .join('\n');
 
 describe('Configuration', () => {
   beforeEach(() => {
@@ -120,6 +130,84 @@ config:
       10, 
       700
     );
+  });
+
+  it('initializes card hosts defined with element alias', async () => {
+    const cardsDir = path.resolve(process.cwd(), 'docs/examples/cards');
+    const cardsYamlPath = path.join(cardsDir, 'cards.yaml');
+    const cardsSvgPath = path.join(cardsDir, 'cards.svg');
+    const cardsCssPath = path.join(cardsDir, 'cards.css');
+
+    const cardsYamlText = fs.readFileSync(cardsYamlPath, 'utf8');
+    const cardsSvgText = fs.readFileSync(cardsSvgPath, 'utf8');
+    const cardsCssText = fs.readFileSync(cardsCssPath, 'utf8');
+
+    const cardsConfig = yaml.load(cardsYamlText) as Record<string, unknown> & {
+      cards?: unknown[];
+    };
+
+    const normalizedCardsConfig = {
+      ...cardsConfig,
+      card_hosts: cardsConfig.cards,
+    };
+
+    const configYaml = `title: Cards Example\nconfig:\n${indentYaml(
+      yaml.dump(normalizedCardsConfig, { lineWidth: -1 })
+    )}`;
+
+    const originalFetchText = Utils.fetchText;
+    const fetchSpy = jest
+      .spyOn(Utils, 'fetchText')
+      .mockImplementation(
+        async (resourceUrl: string, isDemo: boolean, examplesPath: string, useCache: boolean) => {
+          if (resourceUrl.includes('cards.svg')) {
+            return cardsSvgText;
+          }
+
+          if (resourceUrl.includes('cards.css')) {
+            return cardsCssText;
+          }
+
+          return originalFetchText.call(
+            Utils,
+            resourceUrl,
+            isDemo,
+            examplesPath,
+            useCache
+          );
+        }
+      );
+
+    try {
+      createFloorplanExampleElement(
+        {
+          name: 'cards',
+          dir: 'cards',
+          configYaml,
+          isCard: true,
+        },
+        'examples',
+        true,
+        () => {}
+      );
+
+      const floorplanElementInstance = await getFloorplanElement();
+      expect(floorplanElementInstance).toBeInstanceOf(FloorplanElement);
+
+      await getFloorplanSvg();
+
+      expect(floorplanElementInstance.config.card_hosts?.length).toBeGreaterThan(0);
+
+      const resolvedTargets =
+        floorplanElementInstance.config.card_hosts?.map(
+          (host) => host.target ?? host.element
+        ) ?? [];
+
+      expect(resolvedTargets).toContain('#living-room-card');
+      expect(resolvedTargets).toContain('#status-card');
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it.todo('Test image.sizes');

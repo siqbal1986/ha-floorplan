@@ -1034,14 +1034,18 @@ export class FloorplanElement extends LitElement {
     svg: SVGGraphicsElement,
     hostConfig: FloorplanCardHostConfig
   ): SVGGraphicsElement | null {
-    const directTarget = svg.querySelector<SVGGraphicsElement>(
-      hostConfig.target
-    );
+    const selector = hostConfig.target ?? hostConfig.element;
+
+    if (!selector) {
+      return null;
+    }
+
+    const directTarget = svg.querySelector<SVGGraphicsElement>(selector);
     if (directTarget) {
       return directTarget;
     }
 
-    const normalizedTarget = hostConfig.target?.trim();
+    const normalizedTarget = selector.trim();
     if (!normalizedTarget) {
       return null;
     }
@@ -1385,11 +1389,16 @@ export class FloorplanElement extends LitElement {
     const pageId = (config as FloorplanPageConfig).page_id;
 
     for (const hostConfig of config.card_hosts) {
+      if (!hostConfig.target && hostConfig.element) {
+        hostConfig.target = hostConfig.element;
+      }
+
+      const targetSelector = hostConfig.target ?? hostConfig.element;
       const targetElement = this.resolveCardHostTarget(svg, hostConfig);
       if (!targetElement) {
         this.logWarning(
           'CONFIG',
-          `Cannot find element '${hostConfig.target}' in SVG file`
+          `Cannot find element '${targetSelector ?? 'undefined'}' in SVG file`
         );
         continue;
       }
@@ -1399,7 +1408,7 @@ export class FloorplanElement extends LitElement {
         hostConfig.container_id ??
         originalId ??
         hostConfig.id ??
-        this.sanitizeCardHostId(hostConfig.target);
+        this.sanitizeCardHostId(targetSelector ?? '');
       const containerId = this.ensureUniqueCardHostContainerId(baseId);
 
       let foreignObject: SVGForeignObjectElement;
@@ -2354,6 +2363,36 @@ export class FloorplanElement extends LitElement {
           }
         }
       }
+    }
+
+    const invalidCardHosts: FloorplanCardHostConfig[] = [];
+    const seenHosts = new Set<FloorplanCardHostConfig>();
+    const collectInvalidHosts = (hosts?: FloorplanCardHostConfig[]) => {
+      if (!hosts?.length) {
+        return;
+      }
+
+      for (const host of hosts) {
+        if (seenHosts.has(host)) {
+          continue;
+        }
+
+        seenHosts.add(host);
+
+        if (!host.target && !host.element) {
+          invalidCardHosts.push(host);
+        }
+      }
+    };
+
+    collectInvalidHosts(config.card_hosts);
+    collectInvalidHosts(config.cards);
+
+    if (invalidCardHosts.length) {
+      this.logWarning(
+        'CONFIG',
+        `Card host entries should define 'target' or 'element' in floorplan configuration`
+      );
     }
 
     return isValid;
