@@ -1,0 +1,20 @@
+.background {
+  fill: #f3f5f7;
+}
+
+.label {
+  font-family: 'Roboto', sans-serif;
+  font-size: 26px;
+  fill: #2c3e50;
+}
+
+.card-slot {
+  fill: rgba(9, 37, 64, 0.05);
+  stroke: rgba(9, 37, 64, 0.15);
+  stroke-width: 2px;
+}
+
+/* Hide the placeholder rectangle when a card replaces it */
+.card-slot.is-replaced {
+  opacity: 0;
+}
