@@ -15,8 +15,9 @@ import {
 
 import {
   FloorplanSvgElementInfo,
-  FloorplanRuleInfo
+  FloorplanRuleInfo,
 } from './floorplan-info';
+import { LovelaceCardConfig } from '../../../lib/homeassistant/data/lovelace';
 
 export class FloorplanConfig {
   // Core features
@@ -35,6 +36,8 @@ export class FloorplanConfig {
   defaults!: FloorplanRuleConfig;
   image_mobile!: FloorplanImageConfig | string;
   functions!: string;
+
+  card_hosts?: FloorplanCardHostConfig[];
 
   // Experimental features
   pages!: string[];
@@ -128,6 +131,18 @@ export class FloorplanRuleConfig {
     | string
     | false;
   hover_info_filter!: string[];
+}
+
+export interface FloorplanCardResourceConfig {
+  type?: 'module' | 'js';
+  url: string;
+  cache?: boolean;
+}
+
+export interface FloorplanCardHostConfig {
+  container_id: string;
+  config?: LovelaceCardConfig;
+  resources?: FloorplanCardResourceConfig[];
 }
 
 export class FloorplanRuleEntityElementConfig {

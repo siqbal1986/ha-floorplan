@@ -10,7 +10,8 @@ import {
   FloorplanPageConfig,
   FloorplanActionConfig,
   FloorplanCallServiceActionConfig,
-  FloorplanEventActionCallDetail
+  FloorplanEventActionCallDetail,
+  FloorplanCardResourceConfig,
 } from './lib/floorplan-config';
 import {
   FloorplanRuleConfig,
@@ -89,7 +90,15 @@ export class FloorplanElement extends LitElement {
   svg!: SVGGraphicsElement;
 
   private _helpers?: any;
-  private _cards = new Map<string, { container: Element; card?: LovelaceCard }>();
+  private _cards = new Map<
+    string,
+    {
+      container: Element;
+      card?: LovelaceCard;
+      resources?: FloorplanCardResourceConfig[];
+    }
+  >();
+  private _resourcePromises = new Map<string, Promise<void>>();
 
   constructor() {
     super();
@@ -282,7 +291,9 @@ export class FloorplanElement extends LitElement {
         await this.initSinglePage();
       }
 
-      // Add listener 
+      await this.initCardHosts();
+
+      // Add listener
       this.initEventListeners();
     } catch (err) {
       this.handleError(err as Error);
@@ -310,6 +321,35 @@ export class FloorplanElement extends LitElement {
       this.initStartupActions();
     } catch (error) {
       this.handleError(error as Error);
+    }
+  }
+
+  private async initCardHosts(): Promise<void> {
+    await this.applyCardHosts(this.config);
+
+    for (const pageInfo of Object.values(this.pageInfos)) {
+      await this.applyCardHosts(pageInfo.config);
+    }
+  }
+
+  private async applyCardHosts(config: FloorplanConfig): Promise<void> {
+    const hosts = config.card_hosts;
+
+    if (!hosts?.length) {
+      return;
+    }
+
+    for (const host of hosts) {
+      if (!host?.container_id) {
+        this.logError('CONFIG', 'Card host entry must include container_id.');
+        continue;
+      }
+
+      try {
+        await this.setCard(host.container_id, host.config, host.resources);
+      } catch (error) {
+        this.handleError(error as Error, host);
+      }
     }
   }
 
@@ -375,6 +415,111 @@ export class FloorplanElement extends LitElement {
 
       this.shadowRoot?.appendChild(script);
     });
+  }
+
+  private normalizeCardResources(
+    resources: FloorplanCardResourceConfig[] | undefined,
+    containerId: string
+  ): FloorplanCardResourceConfig[] {
+    if (!resources?.length) {
+      return [];
+    }
+
+    const normalized: FloorplanCardResourceConfig[] = [];
+
+    for (const resource of resources) {
+      if (!resource || typeof resource.url !== 'string') {
+        this.logWarning(
+          'CONFIG',
+          `Card host resource for container '${containerId}' is invalid.`
+        );
+        continue;
+      }
+
+      const trimmedUrl = resource.url.trim();
+      if (!trimmedUrl) {
+        this.logWarning(
+          'CONFIG',
+          `Card host resource for container '${containerId}' is missing a URL.`
+        );
+        continue;
+      }
+
+      normalized.push({ ...resource, url: trimmedUrl });
+    }
+
+    return normalized;
+  }
+
+  private resolveResourceUrl(url: string): string {
+    try {
+      return new URL(url, document.baseURI).href;
+    } catch (error) {
+      throw new URIError(`Invalid resource URL: ${url}`);
+    }
+  }
+
+  private getResourceCacheKey(resource: FloorplanCardResourceConfig): string {
+    const type = resource.type ?? 'module';
+    const absoluteUrl = this.resolveResourceUrl(resource.url);
+    return `${type}|${absoluteUrl}`;
+  }
+
+  private async ensureResourceLoaded(
+    resource: FloorplanCardResourceConfig
+  ): Promise<void> {
+    const key = this.getResourceCacheKey(resource);
+
+    let promise = this._resourcePromises.get(key);
+    if (promise) {
+      await promise;
+      return;
+    }
+
+    const type = resource.type ?? 'module';
+    const absoluteUrl = this.resolveResourceUrl(resource.url);
+    const existingScript = Array.from(
+      document.querySelectorAll<HTMLScriptElement>('script')
+    ).find((script) => script.src === absoluteUrl);
+
+    if (existingScript) {
+      promise = Promise.resolve();
+      this._resourcePromises.set(key, promise);
+      await promise;
+      return;
+    }
+
+    const scriptUrl = resource.cache === false
+      ? Utils.cacheBuster(absoluteUrl)
+      : absoluteUrl;
+
+    promise = new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = scriptUrl;
+      script.async = false;
+
+      if (type === 'module') {
+        script.type = 'module';
+      }
+
+      script.onload = () => resolve();
+      script.onerror = (event) => {
+        this._resourcePromises.delete(key);
+        script.remove();
+
+        const message =
+          event instanceof ErrorEvent && event.message
+            ? event.message
+            : `Failed to load resource ${script.src}`;
+
+        reject(new URIError(message));
+      };
+
+      document.head.appendChild(script);
+    });
+
+    this._resourcePromises.set(key, promise);
+    await promise;
   }
 
   async loadPages(): Promise<void> {
@@ -889,19 +1034,19 @@ export class FloorplanElement extends LitElement {
     this._helpers = await (window as any).loadCardHelpers();
   }
 
-  private async setCard(containerId : string, config? : LovelaceCardConfig) : Promise<void> {
-    // Check helpers
+  private async setCard(
+    containerId: string,
+    config?: LovelaceCardConfig,
+    resources?: FloorplanCardResourceConfig[]
+  ): Promise<void> {
     if (!this._helpers) {
-      //throw new Error('Helpers not available');
       await this.loadCardHelpers();
     }
 
-	  // Get entry for this containerId
-	  let entry = this._cards.get(containerId);
-	  
-    // If entry doesn't exist
+    let entry = this._cards.get(containerId);
+
     if (!entry) {
-      let container = this.shadowRoot?.querySelector("#" + containerId);
+      const container = this.shadowRoot?.getElementById(containerId);
       if (!container) {
         this.logError(
           'CONFIG',
@@ -910,37 +1055,33 @@ export class FloorplanElement extends LitElement {
         return;
       }
 
-		  // Create entry (wait for container to be available)
-		  entry = {
-        container: container
-		  };
-
-      // Add entry to _cards
+      entry = { container };
       this._cards.set(containerId, entry);
     }
 
-    // If a card config is defined
+    if (resources !== undefined) {
+      entry.resources = this.normalizeCardResources(resources, containerId);
+    }
+
+    const resourcesToLoad = entry.resources ?? [];
+
+    if (config && resourcesToLoad.length) {
+      await Promise.all(
+        resourcesToLoad.map((resource) => this.ensureResourceLoaded(resource))
+      );
+    }
+
     if (config) {
-      // Create card with helpers
-      const card = this._helpers.createCardElement({...config});
-      
-      // Set its hass
+      const card = this._helpers.createCardElement({ ...config });
+
       if (this.hass) {
         card.hass = this.hass;
       }
-	    
-	    // Set card
-	    entry.card = card;
-      
-      // Inject card inside foreignObject tag (card container)
-      entry.container.replaceChildren(card);
-    }
-    // Remove card
-    else {
-      // Reset card
-      entry.card = undefined;
 
-      // Remove card inside foreignObject tag (card container)
+      entry.card = card;
+      entry.container.replaceChildren(card);
+    } else {
+      entry.card = undefined;
       entry.container.replaceChildren();
     }
   }
@@ -2587,7 +2728,15 @@ export class FloorplanElement extends LitElement {
             );
           }
 
-          this.setCard(entry.container_id, entry.config);
+          const entryResources = Array.isArray(entry.resources)
+            ? (entry.resources as FloorplanCardResourceConfig[])
+            : entry.resources
+            ? [(entry.resources as FloorplanCardResourceConfig)]
+            : undefined;
+
+          this.setCard(entry.container_id, entry.config, entryResources).catch(
+            (error) => this.handleError(error as Error, entry)
+          );
         }
         break;
 
