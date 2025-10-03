@@ -145,6 +145,8 @@ export interface FloorplanCardHostStateConfig {
   card?: LovelaceCardConfig;
   visible?: boolean;
   options?: FloorplanCardSetOptions;
+  mode?: 'replace' | 'overlay';
+  pointer_events?: string;
 }
 
 export interface FloorplanCardHostConditionConfig {
