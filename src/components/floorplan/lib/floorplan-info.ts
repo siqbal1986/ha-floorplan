@@ -3,6 +3,9 @@ import {
   FloorplanPageConfig,
   FloorplanRuleConfig,
   FloorplanActionConfig,
+  FloorplanCardHostConfig,
+  FloorplanCardDefinition,
+  FloorplanCardVariantConfig,
 } from './floorplan-config';
 
 export class FloorplanPageInfo {
@@ -32,6 +35,22 @@ export class FloorplanRuleInfo {
   imageLoader!: number | undefined;
 
   constructor(public rule: FloorplanRuleConfig) {}
+}
+
+export class FloorplanCardVariantInfo {
+  constructor(public config: FloorplanCardVariantConfig) {}
+}
+
+export class FloorplanCardDefinitionInfo {
+  variants: FloorplanCardVariantInfo[] = [];
+
+  constructor(public config: FloorplanCardDefinition) {}
+}
+
+export class FloorplanCardHostInfo {
+  definitions: FloorplanCardDefinitionInfo[] = [];
+
+  constructor(public config: FloorplanCardHostConfig) {}
 }
 
 export class FloorplanEntityInfo {

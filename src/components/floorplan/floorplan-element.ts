@@ -497,6 +497,12 @@ export class FloorplanElement extends LitElement {
       pageInfo.config.rules = pageInfo.config.rules.concat(this.config.rules);
     }
 
+    if (pageInfo.config.cards && this.config.cards) {
+      pageInfo.config.cards = pageInfo.config.cards.concat(this.config.cards);
+    } else if (!pageInfo.config.cards && this.config.cards) {
+      pageInfo.config.cards = this.config.cards.slice();
+    }
+
     this.pageInfos[pageInfo.config.page_id] = pageInfo;
 
     return pageInfo;
@@ -1723,10 +1729,14 @@ export class FloorplanElement extends LitElement {
   validateConfig(config: FloorplanConfig): boolean {
     let isValid = true;
 
-    if (!config.pages && !config.rules) {
+    const hasPages = Array.isArray(config.pages) && config.pages.length > 0;
+    const hasRules = Array.isArray(config.rules) && config.rules.length > 0;
+    const hasCards = Array.isArray(config.cards) && config.cards.length > 0;
+
+    if (!hasPages && !hasRules && !hasCards) {
       this.logWarning(
         'CONFIG',
-        `Cannot find 'pages' nor 'rules' in floorplan configuration`
+        `Cannot find 'pages', 'rules', or 'cards' in floorplan configuration`
       );
       //isValid = false;
     } else {
@@ -1739,32 +1749,36 @@ export class FloorplanElement extends LitElement {
           //isValid = false;
         }
       } else {
-        if (!config.rules) {
+        if (!hasRules && !hasCards) {
           this.logWarning(
             'CONFIG',
-            `Cannot find 'rules' in floorplan configuration`
+            `Cannot find 'rules' or 'cards' in floorplan configuration`
           );
           //isValid = false;
         }
 
-        let invalidRules = config.rules.filter((x) => x.entities && x.elements);
-        if (invalidRules.length) {
-          this.logError(
-            'CONFIG',
-            `A rule cannot contain both 'entities' and 'elements' in floorplan configuration`
+        if (config.rules) {
+          let invalidRules = config.rules.filter(
+            (x) => x.entities && x.elements
           );
-          isValid = false;
-        }
+          if (invalidRules.length) {
+            this.logError(
+              'CONFIG',
+              `A rule cannot contain both 'entities' and 'elements' in floorplan configuration`
+            );
+            isValid = false;
+          }
 
-        invalidRules = config.rules.filter(
-          (x) => !(x.entity || x.entities) && !(x.element || x.elements)
-        );
-        if (invalidRules.length) {
-          this.logError(
-            'CONFIG',
-            `A rule must contain either 'entities' or 'elements' in floorplan configuration`
+          invalidRules = config.rules.filter(
+            (x) => !(x.entity || x.entities) && !(x.element || x.elements)
           );
-          isValid = false;
+          if (invalidRules.length) {
+            this.logError(
+              'CONFIG',
+              `A rule must contain either 'entities' or 'elements' in floorplan configuration`
+            );
+            isValid = false;
+          }
         }
       }
     }
