@@ -162,9 +162,14 @@ export interface FloorplanCardHostConditionConfig {
 
 export interface FloorplanCardHostVariantConfig
   extends FloorplanCardHostStateConfig {
+  id?: string;
   conditions?: FloorplanCardHostConditionConfig[];
   entities?: string[];
 }
+
+export type FloorplanCardHostVariantsConfig =
+  | FloorplanCardHostVariantConfig[]
+  | Record<string, FloorplanCardHostVariantConfig>;
 
 export interface FloorplanCardHostConfig
   extends FloorplanCardHostStateConfig {
@@ -172,7 +177,7 @@ export interface FloorplanCardHostConfig
   target: string;
   container_id?: string;
   entities?: string[];
-  variants?: FloorplanCardHostVariantConfig[];
+  variants?: FloorplanCardHostVariantsConfig;
   foreign_object?: {
     width?: number;
     height?: number;

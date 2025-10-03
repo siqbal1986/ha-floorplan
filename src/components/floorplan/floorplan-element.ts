@@ -1188,7 +1188,7 @@ export class FloorplanElement extends LitElement {
 
     hostConfig.entities?.forEach((entity) => addEntity(entity));
 
-    for (const variant of hostConfig.variants ?? []) {
+    for (const variant of this.ensureCardHostVariants(hostConfig)) {
       variant.entities?.forEach((entity) => addEntity(entity));
       for (const condition of variant.conditions ?? []) {
         addEntity(condition.entity);
@@ -1196,6 +1196,55 @@ export class FloorplanElement extends LitElement {
     }
 
     return entities;
+  }
+
+  private ensureCardHostVariants(
+    hostConfig: FloorplanCardHostConfig
+  ): FloorplanCardHostVariantConfig[] {
+    const { variants } = hostConfig;
+
+    if (!variants) {
+      return [];
+    }
+
+    if (Array.isArray(variants)) {
+      return variants;
+    }
+
+    if (this.isPlainObject(variants)) {
+      const normalized = Object.entries(variants).map(
+        ([variantId, variantConfig]) => {
+          const normalizedVariant: FloorplanCardHostVariantConfig =
+            this.isPlainObject(variantConfig)
+              ? { ...(variantConfig as FloorplanCardHostVariantConfig) }
+              : {};
+
+          if (!normalizedVariant.id) {
+            normalizedVariant.id = variantId;
+          }
+
+          return normalizedVariant;
+        }
+      );
+
+      hostConfig.variants = normalized;
+      return normalized;
+    }
+
+    return [];
+  }
+
+  private isPlainObject(value: unknown): value is Record<string, unknown> {
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      Array.isArray(value)
+    ) {
+      return false;
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
   }
 
   private buildCardHostBaseState(
@@ -1229,7 +1278,7 @@ export class FloorplanElement extends LitElement {
   ): FloorplanCardHostAutoState {
     const state = this.buildCardHostBaseState(host.config);
 
-    for (const variant of host.config.variants ?? []) {
+    for (const variant of this.ensureCardHostVariants(host.config)) {
       if (!this.evaluateCardHostVariant(variant)) {
         continue;
       }
