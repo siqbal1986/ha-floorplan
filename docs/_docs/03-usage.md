@@ -346,6 +346,148 @@ The following example shows how the style is generated using a block of JavaScri
         return `transform: translate(0, ${height - Math.floor(entity.attributes.level / (100 / height))}px)`;
 ```
 
+## Embedding Lovelace cards with `cards[]`
+
+Floorplan can now manage Lovelace cards directly through a dedicated `cards[]` block at the root of the configuration. Each
+entry links a card configuration with an SVG element, allowing Floorplan to create the hosting container, keep track of the
+default card, and make it available to services such as `floorplan.card_set` without any additional boilerplate. A minimal
+definition looks like the following:
+
+```yaml
+cards:
+  - id: living_room_card
+    element: '#living-room-card'
+    mode: replace
+    pointer_events: passthrough
+    card:
+      type: thermostat
+      entity: climate.living_room
+```
+
+The example bundle in `docs/examples/cards/` contains a fully working SVG, stylesheet, and configuration that you can copy into
+your own setup for reference. The snippet above is taken from `cards.yaml`, which pairs the placeholder rectangle in
+`cards.svg` with a thermostat Lovelace card. The remaining sections describe the optional keys you can use to tune this
+behaviour.
+
+### `mode`
+
+Use `mode` to describe how the generated card container should interact with the referenced SVG element. The following options
+are available:
+
+- `replace` (default) removes the original element from the rendered SVG and positions the card where the element was located.
+  This is ideal when a simple shape, such as the rectangle in `cards.svg`, merely acts as a placeholder for the Lovelace card.
+- `overlay` leaves the existing element in place and layers the Lovelace card on top of it. You can combine this with custom CSS
+  (for example, by toggling an `.is-replaced` class) to dim or hide the underlying element when a card is present.
+
+### Pointer events
+
+The `pointer_events` key controls how pointer input is handled when the Lovelace card is rendered. Two presets are available:
+
+- `passthrough` allows clicks and gestures to fall through to the original SVG element. This is useful for cards that should
+  follow the same tap or hover handling defined in your rules while still displaying Lovelace content.
+- `capture` (or any other valid CSS value such as `auto`) lets the card consume pointer events, enabling full interaction with
+  the embedded Lovelace card (for example, adjusting a thermostat slider or toggling buttons).
+
+Floorplan applies the corresponding `pointer-events` CSS rule to the generated container, so you can always provide a custom
+value if you need more granular behaviour.
+
+### Variant overrides
+
+`cards[]` entries understand Floorplan [variants](../01-04-how-to-handle-size-and-expand-floorplan/). Use the optional
+`variants` map to override the base configuration when a specific variant is active:
+
+```yaml
+cards:
+  - id: living_room_card
+    element: '#living-room-card'
+    card:
+      type: thermostat
+      entity: climate.living_room
+    variants:
+      panel:
+        pointer_events: capture
+      maintenance:
+        card:
+          type: custom:repair-status-card
+          entity: climate.living_room
+```
+
+In the example above, the card switches to a maintenance dashboard whenever the `maintenance` variant is selected, while the
+`panel` variant simply flips pointer handling for kiosk-style displays. Any property defined inside a variant block overrides
+the base definition for that variant only.
+
+### Runtime swaps
+
+Because Floorplan owns the card container defined in `cards[]`, you can swap Lovelace cards at runtime without losing track of
+the original configuration. Use the existing `floorplan.card_set` service and provide the `cards[].id` value as the
+`container_id`. The example configuration in `docs/examples/cards/cards.yaml` adds a tap action that temporarily swaps the
+thermostat card for an entities list, waits 15 seconds, and then restores the original card:
+
+```yaml
+rules:
+  - element: '#living-room-card'
+    tap_action:
+      action: call-service
+      service: floorplan.execute
+      service_data:
+        swap_living_room_card: |
+          >
+          const swapTo = {
+            service: 'floorplan.card_set',
+            service_data: {
+              container_id: 'living_room_card',
+              config: {
+                type: 'entities',
+                title: 'Temporary climate snapshot',
+                entities: [
+                  'sensor.living_room_temperature',
+                  'sensor.living_room_humidity',
+                  'sensor.living_room_heating_demand'
+                ]
+              }
+            }
+          };
+          const swapBack = {
+            service: 'floorplan.card_set',
+            service_data: {
+              container_id: 'living_room_card',
+              config: {
+                type: 'thermostat',
+                entity: 'climate.living_room'
+              }
+            }
+          };
+          this.action('call-service', swapTo);
+          setTimeout(() => this.action('call-service', swapBack), 15000);
+```
+
+You can attach the same pattern to state-triggered rules (for example, reacting to an HVAC alert) to provide contextual cards
+without redefining your base configuration.
+
+### Loading external card resources
+
+When you reference custom Lovelace cards from `cards[]`, the dashboard must already have access to the relevant resources. Add
+the required URLs or modules to your dashboard resources (via Settings → Dashboards → Resources, or by editing your `lovelace`
+YAML configuration) before the floorplan loads. If a custom card is missing, the `cards[]` entry will fall back to an error card
+until the resource becomes available.
+
+### Migrating from manual `foreignObject` containers
+
+Existing configurations that relied on hand-crafted `foreignObject` elements and manual `floorplan.card_set` calls can be
+migrated to `cards[]` in a few small steps:
+
+1. Remove the `<foreignObject>` wrappers from your SVG and replace them with simple placeholder shapes or groups positioned
+   where you want the card to appear.
+2. Declare a matching `cards[]` entry for each placeholder, using the element ID (for example `#living-room-card`) and copying
+   the Lovelace configuration that was previously passed to `card_set`.
+3. Update your rules so that any `floorplan.card_set` calls reference the new `id` value, rather than a DOM element ID. This
+   ensures runtime swaps continue to work while `cards[]` restores the default card automatically.
+4. Remove any helper code that created or cleaned up the card containers manually—the lifecycle is now managed entirely by
+   Floorplan.
+
+Once migrated, you gain consistent pointer handling, variant overrides, and easier runtime swaps without duplicating the base
+card configuration.
+
 #### Using `card_set` to set / reset / change a HA card inside a foreignObject tag
 
 If you want to embed HA card in your SVG, add a foreignObject tag inside your SVG, like this example :

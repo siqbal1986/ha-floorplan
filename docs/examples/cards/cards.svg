@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400">
+  <title>cards[] example layout</title>
+  <rect width="600" height="400" class="background" />
+  <g id="living-room">
+    <text x="40" y="60" class="label">Living room</text>
+    <rect id="living-room-card" x="40" y="80" width="240" height="220" rx="12" class="card-slot" />
+  </g>
+  <g id="status" transform="translate(320,0)">
+    <text x="0" y="60" class="label">Status overlay</text>
+    <rect id="status-card" x="0" y="80" width="240" height="120" rx="12" class="card-slot" />
+  </g>
+</svg>

@@ -1,0 +1,66 @@
+image: /local/floorplan/examples/cards/cards.svg
+stylesheet: /local/floorplan/examples/cards/cards.css
+
+cards:
+  - id: living_room_card
+    element: '#living-room-card'
+    mode: replace
+    pointer_events: passthrough
+    card:
+      type: thermostat
+      entity: climate.living_room
+    variants:
+      panel:
+        pointer_events: capture
+      maintenance:
+        card:
+          type: custom:repair-status-card
+          entity: climate.living_room
+
+  - id: status_card
+    element: '#status-card'
+    mode: overlay
+    pointer_events: capture
+    card:
+      type: entities
+      title: Climate overview
+      entities:
+        - sensor.living_room_temperature
+        - sensor.living_room_humidity
+        - binary_sensor.hvac_alert
+
+rules:
+  - element: '#living-room-card'
+    tap_action:
+      action: call-service
+      service: floorplan.execute
+      service_data:
+        swap_living_room_card: |
+          >
+          const swapTo = {
+            service: 'floorplan.card_set',
+            service_data: {
+              container_id: 'living_room_card',
+              config: {
+                type: 'entities',
+                title: 'Temporary climate snapshot',
+                entities: [
+                  'sensor.living_room_temperature',
+                  'sensor.living_room_humidity',
+                  'sensor.living_room_heating_demand'
+                ]
+              }
+            }
+          };
+          const swapBack = {
+            service: 'floorplan.card_set',
+            service_data: {
+              container_id: 'living_room_card',
+              config: {
+                type: 'thermostat',
+                entity: 'climate.living_room'
+              }
+            }
+          };
+          this.action('call-service', swapTo);
+          setTimeout(() => this.action('call-service', swapBack), 15000);
