@@ -27,6 +27,9 @@ export class FloorplanConfig {
   log_level!: string;
   console_log_level!: string;
   rules!: FloorplanRuleConfig[];
+  /**
+   * @deprecated Use `cards` instead.
+   */
   card_hosts?: FloorplanCardHostConfig[];
 
   // Optional features
@@ -38,7 +41,7 @@ export class FloorplanConfig {
   defaults!: FloorplanRuleConfig;
   image_mobile!: FloorplanImageConfig | string;
   functions!: string;
-  cards!: FloorplanCardHostConfig[];
+  cards?: FloorplanCardHostConfig[];
 
   // Experimental features
   pages!: string[];

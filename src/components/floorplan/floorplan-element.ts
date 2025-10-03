@@ -1378,13 +1378,15 @@ export class FloorplanElement extends LitElement {
     svg: SVGGraphicsElement,
     config: FloorplanConfig
   ): void {
-    if (!config.card_hosts?.length) {
+    const cardHosts = config.cards ?? config.card_hosts;
+
+    if (!cardHosts?.length) {
       return;
     }
 
     const pageId = (config as FloorplanPageConfig).page_id;
 
-    for (const hostConfig of config.card_hosts) {
+    for (const hostConfig of cardHosts) {
       const targetElement = this.resolveCardHostTarget(svg, hostConfig);
       if (!targetElement) {
         this.logWarning(
@@ -2304,12 +2306,13 @@ export class FloorplanElement extends LitElement {
 
     const hasPages = Array.isArray(config.pages) && config.pages.length > 0;
     const hasRules = Array.isArray(config.rules) && config.rules.length > 0;
-    const hasCards = Array.isArray(config.cards) && config.cards.length > 0;
+    const cardHosts = config.cards ?? config.card_hosts;
+    const hasCards = Array.isArray(cardHosts) && cardHosts.length > 0;
 
     if (!hasPages && !hasRules && !hasCards) {
       this.logWarning(
         'CONFIG',
-        `Cannot find 'pages', 'rules', or 'cards' in floorplan configuration`
+        `Cannot find 'pages', 'rules', 'cards', or 'card_hosts' in floorplan configuration`
       );
       //isValid = false;
     } else {
@@ -2325,7 +2328,7 @@ export class FloorplanElement extends LitElement {
         if (!hasRules && !hasCards) {
           this.logWarning(
             'CONFIG',
-            `Cannot find 'rules' or 'cards' in floorplan configuration`
+            `Cannot find 'rules', 'cards', or 'card_hosts' in floorplan configuration`
           );
           //isValid = false;
         }
