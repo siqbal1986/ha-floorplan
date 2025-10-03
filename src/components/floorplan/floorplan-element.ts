@@ -22,6 +22,12 @@ import {
   FloorplanStylesheetConfig,
 } from './lib/floorplan-config';
 import {
+  FloorplanCardHostConfig,
+  FloorplanCardHostVariantConfig,
+  FloorplanCardHostConditionConfig,
+  FloorplanCardSetOptions,
+} from './lib/floorplan-config';
+import {
   FloorplanClickContext,
   FloorplanPageInfo,
   FloorplanRuleInfo,
@@ -50,6 +56,34 @@ import { HA_FLOORPLAN_ACTION_CALL_EVENT } from './lib/events';
 import { customElement, property } from 'lit/decorators.js';
 import OuiDomEvents from './lib/oui-dom-events.js'; // Ensure the .js extension is included, to be handled by babel
 const E = OuiDomEvents;
+
+type FloorplanCardOverrideSource = 'auto' | 'manual';
+
+interface FloorplanCardEntry {
+  container: Element;
+  card?: LovelaceCard;
+  hostId?: string;
+}
+
+interface FloorplanCardHostAutoState {
+  config?: LovelaceCardConfig;
+  visible?: boolean;
+}
+
+interface FloorplanCardHostInternal {
+  id: string;
+  containerId: string;
+  pageId?: string;
+  config: FloorplanCardHostConfig;
+  targetElement: SVGGraphicsElement;
+  foreignObject: SVGForeignObjectElement;
+  container: HTMLElement;
+  overrideSource: FloorplanCardOverrideSource;
+  watchedEntities: Set<string>;
+  isForeignObjectManaged: boolean;
+  autoState?: FloorplanCardHostAutoState;
+  currentVisible?: boolean;
+}
 
 declare let NAME: string;
 declare let DESCRIPTION: string | undefined;
@@ -89,7 +123,9 @@ export class FloorplanElement extends LitElement {
   svg!: SVGGraphicsElement;
 
   private _helpers?: any;
-  private _cards = new Map<string, { container: Element; card?: LovelaceCard }>();
+  private _cards: Map<string, FloorplanCardEntry> = new Map();
+  private _cardHosts: Map<string, FloorplanCardHostInternal> = new Map();
+  private _cardHostContainers: Map<string, string> = new Map();
 
   constructor() {
     super();
@@ -233,8 +269,10 @@ export class FloorplanElement extends LitElement {
       this.isRulesLoaded = true;
       await this.handleEntities(true);
     } else {
-      this.handleEntities();
+      await this.handleEntities();
     }
+
+    await this.updateCardHosts();
 
     // Update cards hass
     for (const { card } of this._cards.values()) {
@@ -273,6 +311,8 @@ export class FloorplanElement extends LitElement {
       if (!this.validateConfig(config)) return;
 
       this.config = config; // set resolved config as effective config
+
+      this.resetCardHosts();
 
       //await this.loadLibraries()
 
@@ -889,19 +929,19 @@ export class FloorplanElement extends LitElement {
     this._helpers = await (window as any).loadCardHelpers();
   }
 
-  private async setCard(containerId : string, config? : LovelaceCardConfig) : Promise<void> {
-    // Check helpers
+  private async setCard(
+    containerId: string,
+    config?: LovelaceCardConfig,
+    options: FloorplanCardSetOptions = {}
+  ): Promise<void> {
     if (!this._helpers) {
-      //throw new Error('Helpers not available');
       await this.loadCardHelpers();
     }
 
-	  // Get entry for this containerId
-	  let entry = this._cards.get(containerId);
-	  
-    // If entry doesn't exist
+    let entry = this._cards.get(containerId);
+
     if (!entry) {
-      let container = this.shadowRoot?.querySelector("#" + containerId);
+      const container = this.shadowRoot?.getElementById(containerId);
       if (!container) {
         this.logError(
           'CONFIG',
@@ -910,38 +950,568 @@ export class FloorplanElement extends LitElement {
         return;
       }
 
-		  // Create entry (wait for container to be available)
-		  entry = {
-        container: container
-		  };
-
-      // Add entry to _cards
+      entry = {
+        container,
+      };
       this._cards.set(containerId, entry);
     }
 
-    // If a card config is defined
+    const host = entry.hostId
+      ? this._cardHosts.get(entry.hostId)
+      : this.findCardHostByContainerId(containerId);
+
+    if (host && !entry.hostId) {
+      entry.hostId = host.id;
+    }
+
+    if (host && options.source) {
+      host.overrideSource = options.source;
+    }
+
+    if (host && options.visible !== undefined) {
+      this.applyCardHostVisibility(host, options.visible);
+      if (options.source !== 'manual') {
+        host.autoState = host.autoState ?? {};
+        host.autoState.visible = options.visible;
+      }
+    }
+
     if (config) {
-      // Create card with helpers
-      const card = this._helpers.createCardElement({...config});
-      
-      // Set its hass
+      const card = this._helpers.createCardElement({ ...config });
+
       if (this.hass) {
         card.hass = this.hass;
       }
-	    
-	    // Set card
-	    entry.card = card;
-      
-      // Inject card inside foreignObject tag (card container)
-      entry.container.replaceChildren(card);
-    }
-    // Remove card
-    else {
-      // Reset card
-      entry.card = undefined;
 
-      // Remove card inside foreignObject tag (card container)
+      entry.card = card;
+      entry.container.replaceChildren(card);
+
+      if (host && options.source !== 'manual') {
+        host.autoState = host.autoState ?? {};
+        host.autoState.config = this.cloneCardConfig(config);
+      }
+    } else {
+      entry.card = undefined;
       entry.container.replaceChildren();
+
+      if (host && options.source !== 'manual') {
+        host.autoState = host.autoState ?? {};
+        host.autoState.config = undefined;
+      }
+    }
+  }
+
+  private resetCardHosts(): void {
+    for (const entry of this._cards.values()) {
+      if (entry.container && entry.container.isConnected) {
+        entry.container.replaceChildren();
+      }
+    }
+
+    for (const host of this._cardHosts.values()) {
+      if (host.isForeignObjectManaged && host.foreignObject.isConnected) {
+        host.foreignObject.remove();
+      } else if (
+        host.container.isConnected &&
+        host.container.parentElement === host.foreignObject
+      ) {
+        host.container.remove();
+      }
+    }
+
+    this._cards.clear();
+    this._cardHosts.clear();
+    this._cardHostContainers.clear();
+  }
+
+  private resolveCardHostTarget(
+    svg: SVGGraphicsElement,
+    hostConfig: FloorplanCardHostConfig
+  ): SVGGraphicsElement | null {
+    const directTarget = svg.querySelector<SVGGraphicsElement>(
+      hostConfig.target
+    );
+    if (directTarget) {
+      return directTarget;
+    }
+
+    const normalizedTarget = hostConfig.target?.trim();
+    if (!normalizedTarget) {
+      return null;
+    }
+
+    const simpleTarget = normalizedTarget.startsWith('#')
+      ? normalizedTarget.slice(1)
+      : normalizedTarget;
+
+    if (
+      simpleTarget &&
+      !normalizedTarget.includes(' ') &&
+      !normalizedTarget.includes('.') &&
+      !normalizedTarget.includes('[') &&
+      !normalizedTarget.includes(':')
+    ) {
+      const candidate =
+        svg.querySelector<SVGGraphicsElement>(`#${simpleTarget}`) ??
+        this.svgElements[simpleTarget];
+      if (candidate) {
+        return candidate;
+      }
+    }
+
+    if (normalizedTarget.startsWith('#')) {
+      const candidate = normalizedTarget.slice(1);
+      return (
+        svg.querySelector<SVGGraphicsElement>(`#${candidate}`) ??
+        this.svgElements[candidate] ??
+        null
+      );
+    }
+
+    return null;
+  }
+
+  private sanitizeCardHostId(value: string): string {
+    return value.replace(/[^A-Za-z0-9_-]/g, '_');
+  }
+
+  private ensureUniqueCardHostContainerId(baseId: string): string {
+    const sanitizedBase = this.sanitizeCardHostId(
+      baseId || 'floorplan_card_host'
+    );
+    let candidate = sanitizedBase;
+    let counter = 1;
+
+    const isTaken = (id: string) =>
+      !!this.shadowRoot?.getElementById(id) ||
+      this._cardHostContainers.has(id) ||
+      this._cards.has(id);
+
+    while (isTaken(candidate)) {
+      candidate = this.sanitizeCardHostId(
+        `${sanitizedBase}-${counter++}`
+      );
+    }
+
+    return candidate;
+  }
+
+  private createForeignObjectFromTarget(
+    target: SVGGraphicsElement,
+    hostConfig: FloorplanCardHostConfig
+  ): SVGForeignObjectElement {
+    const foreignObject = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'foreignObject'
+    );
+    const bbox = target.getBBox ? target.getBBox() : { x: 0, y: 0, width: 0, height: 0 };
+
+    const width = hostConfig.foreign_object?.width ?? bbox.width ?? 0;
+    const height = hostConfig.foreign_object?.height ?? bbox.height ?? 0;
+    const x = hostConfig.foreign_object?.x ?? bbox.x ?? 0;
+    const y = hostConfig.foreign_object?.y ?? bbox.y ?? 0;
+
+    foreignObject.setAttribute('x', `${x}`);
+    foreignObject.setAttribute('y', `${y}`);
+    foreignObject.setAttribute('width', `${width}`);
+    foreignObject.setAttribute('height', `${height}`);
+
+    if (target.hasAttribute('transform')) {
+      foreignObject.setAttribute(
+        'transform',
+        target.getAttribute('transform') as string
+      );
+    }
+
+    const replaced = this.replaceElement(target, foreignObject);
+    replaced.dataset.floorplanCardHost = 'managed';
+    return replaced;
+  }
+
+  private ensureCardHostContainerElement(
+    foreignObject: SVGForeignObjectElement,
+    hostId: string
+  ): HTMLElement {
+    const existing = foreignObject.querySelector<HTMLElement>(':scope > *');
+    const container = existing instanceof HTMLElement
+      ? existing
+      : document.createElement('div');
+
+    container.setAttribute('data-floorplan-card-host-container', hostId);
+    container.style.width = '100%';
+    container.style.height = '100%';
+    container.style.pointerEvents = 'auto';
+
+    foreignObject.replaceChildren(container);
+
+    return container;
+  }
+
+  private collectCardHostEntities(
+    hostConfig: FloorplanCardHostConfig
+  ): Set<string> {
+    const entities = new Set<string>();
+
+    const addEntity = (entity?: string) => {
+      if (entity) {
+        entities.add(entity);
+      }
+    };
+
+    hostConfig.entities?.forEach((entity) => addEntity(entity));
+
+    for (const variant of hostConfig.variants ?? []) {
+      variant.entities?.forEach((entity) => addEntity(entity));
+      for (const condition of variant.conditions ?? []) {
+        addEntity(condition.entity);
+      }
+    }
+
+    return entities;
+  }
+
+  private buildCardHostBaseState(
+    config: FloorplanCardHostConfig
+  ): FloorplanCardHostAutoState {
+    const state: FloorplanCardHostAutoState = {};
+
+    if (config.card) {
+      state.cardConfig = this.cloneCardConfig(config.card);
+    }
+
+    if (config.visible !== undefined) {
+      state.visible = config.visible;
+    } else if (config.options?.visible !== undefined) {
+      state.visible = config.options.visible;
+    }
+
+    return state;
+  }
+
+  private buildCardHostState(
+    host: FloorplanCardHostInternal
+  ): FloorplanCardHostAutoState {
+    const state = this.buildCardHostBaseState(host.config);
+
+    for (const variant of host.config.variants ?? []) {
+      if (!this.evaluateCardHostVariant(variant)) {
+        continue;
+      }
+
+      if (variant.card) {
+        state.cardConfig = state.cardConfig
+          ? this.mergeCardConfigs(state.cardConfig, variant.card)
+          : this.cloneCardConfig(variant.card);
+      }
+
+      if (variant.visible !== undefined) {
+        state.visible = variant.visible;
+      } else if (variant.options?.visible !== undefined) {
+        state.visible = variant.options.visible;
+      }
+    }
+
+    return state;
+  }
+
+  private evaluateCardHostVariant(
+    variant: FloorplanCardHostVariantConfig
+  ): boolean {
+    if (!variant.conditions?.length) {
+      return true;
+    }
+
+    for (const condition of variant.conditions) {
+      if (!this.evaluateCardHostCondition(condition)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private evaluateCardHostCondition(
+    condition: FloorplanCardHostConditionConfig
+  ): boolean {
+    if (!this.hass) {
+      return false;
+    }
+
+    const entityState = this.hass.states[condition.entity];
+    if (!entityState) {
+      return false;
+    }
+
+    const attributeValue =
+      condition.attribute !== undefined
+        ? (entityState.attributes as Record<string, unknown>)[
+            condition.attribute
+          ]
+        : entityState.state;
+
+    if (condition.state !== undefined) {
+      return this.matchesCardHostStateValue(entityState.state, condition.state);
+    }
+
+    if (condition.not_state !== undefined) {
+      return !this.matchesCardHostStateValue(
+        entityState.state,
+        condition.not_state
+      );
+    }
+
+    if (condition.equals !== undefined) {
+      return Utils.equal(attributeValue, condition.equals);
+    }
+
+    if (condition.not_equals !== undefined) {
+      return !Utils.equal(attributeValue, condition.not_equals);
+    }
+
+    if (condition.in) {
+      return condition.in.some((candidate) =>
+        Utils.equal(attributeValue, candidate)
+      );
+    }
+
+    if (condition.not_in) {
+      return !condition.not_in.some((candidate) =>
+        Utils.equal(attributeValue, candidate)
+      );
+    }
+
+    return attributeValue !== undefined && attributeValue !== null;
+  }
+
+  private matchesCardHostStateValue(
+    actual: string,
+    expected: string | string[]
+  ): boolean {
+    if (Array.isArray(expected)) {
+      return expected.some((candidate) => candidate === actual);
+    }
+
+    return actual === expected;
+  }
+
+  private cloneCardConfig(config: LovelaceCardConfig): LovelaceCardConfig {
+    return JSON.parse(JSON.stringify(config)) as LovelaceCardConfig;
+  }
+
+  private mergeCardConfigs(
+    base: LovelaceCardConfig,
+    override: LovelaceCardConfig
+  ): LovelaceCardConfig {
+    const result = this.cloneCardConfig(base) as Record<string, unknown>;
+    return this.mergeDeepObjects(
+      result,
+      override as Record<string, unknown>
+    ) as LovelaceCardConfig;
+  }
+
+  private mergeDeepObjects(
+    target: Record<string, unknown>,
+    source: Record<string, unknown>
+  ): Record<string, unknown> {
+    const output = { ...target };
+
+    for (const [key, value] of Object.entries(source)) {
+      if (Array.isArray(value)) {
+        output[key] = value.map((item) => {
+          if (item && typeof item === 'object') {
+            return this.mergeDeepObjects({}, item as Record<string, unknown>);
+          }
+          return item;
+        });
+      } else if (value && typeof value === 'object') {
+        const existing = output[key];
+        const baseObject =
+          existing &&
+          typeof existing === 'object' &&
+          !Array.isArray(existing)
+            ? (existing as Record<string, unknown>)
+            : {};
+        output[key] = this.mergeDeepObjects(
+          baseObject,
+          value as Record<string, unknown>
+        );
+      } else {
+        output[key] = value;
+      }
+    }
+
+    return output;
+  }
+
+  private applyCardHostVisibility(
+    host: FloorplanCardHostInternal,
+    visible?: boolean
+  ): void {
+    if (visible === undefined) {
+      return;
+    }
+
+    host.currentVisible = visible;
+    const displayValue = visible ? '' : 'none';
+    host.foreignObject.style.display = displayValue;
+    host.container.style.display = visible ? '' : 'none';
+  }
+
+  private findCardHostByContainerId(
+    containerId: string
+  ): FloorplanCardHostInternal | undefined {
+    const hostId = this._cardHostContainers.get(containerId);
+    if (hostId) {
+      return this._cardHosts.get(hostId);
+    }
+
+    return undefined;
+  }
+
+  private initCardHosts(
+    svg: SVGGraphicsElement,
+    config: FloorplanConfig
+  ): void {
+    if (!config.card_hosts?.length) {
+      return;
+    }
+
+    const pageId = (config as FloorplanPageConfig).page_id;
+
+    for (const hostConfig of config.card_hosts) {
+      const targetElement = this.resolveCardHostTarget(svg, hostConfig);
+      if (!targetElement) {
+        this.logWarning(
+          'CONFIG',
+          `Cannot find element '${hostConfig.target}' in SVG file`
+        );
+        continue;
+      }
+
+      const originalId = targetElement.id;
+      const baseId =
+        hostConfig.container_id ??
+        originalId ??
+        hostConfig.id ??
+        this.sanitizeCardHostId(hostConfig.target);
+      const containerId = this.ensureUniqueCardHostContainerId(baseId);
+
+      let foreignObject: SVGForeignObjectElement;
+      let isManaged = false;
+
+      if (targetElement instanceof SVGForeignObjectElement) {
+        foreignObject = targetElement;
+      } else {
+        foreignObject = this.createForeignObjectFromTarget(
+          targetElement,
+          hostConfig
+        );
+        isManaged = true;
+      }
+
+      if (!foreignObject.id || foreignObject.id !== containerId) {
+        foreignObject.id = containerId;
+      }
+
+      const hostId =
+        hostConfig.id ??
+        (pageId ? `${pageId}-${containerId}` : containerId);
+
+      const container = this.ensureCardHostContainerElement(
+        foreignObject,
+        hostId
+      );
+
+      const watchedEntities = this.collectCardHostEntities(hostConfig);
+      const overrideSource = hostConfig.options?.source ?? 'auto';
+
+      const hostEntry: FloorplanCardHostInternal = {
+        id: hostId,
+        containerId,
+        pageId,
+        config: hostConfig,
+        targetElement: foreignObject,
+        foreignObject,
+        container,
+        overrideSource,
+        watchedEntities,
+        isForeignObjectManaged: isManaged,
+        currentVisible: undefined,
+      };
+
+      this._cardHosts.set(hostId, hostEntry);
+      this._cardHostContainers.set(containerId, hostId);
+      this._cards.set(containerId, { container, hostId });
+
+      const baseState = this.buildCardHostBaseState(hostConfig);
+      if (baseState.visible !== undefined) {
+        this.applyCardHostVisibility(hostEntry, baseState.visible);
+      }
+
+      if (baseState.cardConfig || baseState.visible !== undefined) {
+        void this.setCard(containerId, baseState.cardConfig, {
+          source: hostEntry.overrideSource,
+          visible: baseState.visible,
+        });
+        hostEntry.autoState = {
+          config: baseState.cardConfig
+            ? this.cloneCardConfig(baseState.cardConfig)
+            : undefined,
+          visible: baseState.visible,
+        };
+      }
+    }
+  }
+
+  private async updateCardHosts(
+    changedEntityIds?: Set<string>
+  ): Promise<void> {
+    if (!this.hass || !this._cardHosts.size) {
+      return;
+    }
+
+    for (const host of this._cardHosts.values()) {
+      if (host.overrideSource === 'manual') {
+        continue;
+      }
+
+      if (changedEntityIds && host.watchedEntities.size) {
+        let intersects = false;
+        for (const entityId of host.watchedEntities) {
+          if (changedEntityIds.has(entityId)) {
+            intersects = true;
+            break;
+          }
+        }
+
+        if (!intersects) {
+          continue;
+        }
+      }
+
+      const state = this.buildCardHostState(host);
+      const autoState = host.autoState ?? {};
+
+      const cardChanged = !Utils.equal(autoState.config, state.cardConfig);
+      const visibilityChanged =
+        state.visible !== undefined &&
+        state.visible !== host.currentVisible;
+
+      if (!cardChanged && !visibilityChanged) {
+        continue;
+      }
+
+      host.autoState = {
+        config: state.cardConfig
+          ? this.cloneCardConfig(state.cardConfig)
+          : undefined,
+        visible: state.visible,
+      };
+
+      await this.setCard(host.containerId, state.cardConfig, {
+        source: 'auto',
+        visible: state.visible,
+      });
     }
   }
 
@@ -1112,6 +1682,7 @@ export class FloorplanElement extends LitElement {
     }
 
     this.initRules(config, svg, svgElements);
+    this.initCardHosts(svg, config);
   }
 
   initRules(
@@ -1512,6 +2083,8 @@ export class FloorplanElement extends LitElement {
         await this.handleEntity(entityId);
       }
     }
+
+    await this.updateCardHosts(changedEntityIds);
   }
 
   getChangedEntities(isInitialLoad: boolean): Set<string> {
@@ -2587,7 +3160,12 @@ export class FloorplanElement extends LitElement {
             );
           }
 
-          this.setCard(entry.container_id, entry.config);
+          const options =
+            entry.options && typeof entry.options === 'object'
+              ? (entry.options as FloorplanCardSetOptions)
+              : undefined;
+
+          void this.setCard(entry.container_id, entry.config, options ?? {});
         }
         break;
 

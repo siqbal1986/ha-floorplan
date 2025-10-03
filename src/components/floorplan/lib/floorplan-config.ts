@@ -2,6 +2,7 @@ import {
   ActionConfig,
   BaseActionConfig,
 } from '../../../lib/homeassistant/lovelace/types';
+import { LovelaceCardConfig } from '../../../lib/homeassistant/data/lovelace';
 
 import {
   ToggleActionConfig,
@@ -25,6 +26,7 @@ export class FloorplanConfig {
   log_level!: string;
   console_log_level!: string;
   rules!: FloorplanRuleConfig[];
+  card_hosts?: FloorplanCardHostConfig[];
 
   // Optional features
   startup_action!:
@@ -128,6 +130,49 @@ export class FloorplanRuleConfig {
     | string
     | false;
   hover_info_filter!: string[];
+}
+
+export interface FloorplanCardSetOptions {
+  source?: 'auto' | 'manual';
+  visible?: boolean;
+}
+
+export interface FloorplanCardHostStateConfig {
+  card?: LovelaceCardConfig;
+  visible?: boolean;
+  options?: FloorplanCardSetOptions;
+}
+
+export interface FloorplanCardHostConditionConfig {
+  entity: string;
+  attribute?: string;
+  state?: string | string[];
+  not_state?: string | string[];
+  equals?: unknown;
+  not_equals?: unknown;
+  in?: unknown[];
+  not_in?: unknown[];
+}
+
+export interface FloorplanCardHostVariantConfig
+  extends FloorplanCardHostStateConfig {
+  conditions?: FloorplanCardHostConditionConfig[];
+  entities?: string[];
+}
+
+export interface FloorplanCardHostConfig
+  extends FloorplanCardHostStateConfig {
+  id?: string;
+  target: string;
+  container_id?: string;
+  entities?: string[];
+  variants?: FloorplanCardHostVariantConfig[];
+  foreign_object?: {
+    width?: number;
+    height?: number;
+    x?: number;
+    y?: number;
+  };
 }
 
 export class FloorplanRuleEntityElementConfig {
