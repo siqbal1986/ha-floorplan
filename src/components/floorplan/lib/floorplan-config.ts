@@ -18,7 +18,6 @@ import {
   FloorplanSvgElementInfo,
   FloorplanRuleInfo
 } from './floorplan-info';
-import { LovelaceCardConfig } from '../../../lib/homeassistant/data/lovelace';
 
 export class FloorplanConfig {
   // Core features
@@ -74,24 +73,6 @@ export type FloorplanActionConfig =
   | NoActionConfig
   | CustomActionConfig
   | HoverInfoActionConfig;
-
-export interface FloorplanCardVariantConfig {
-  id: string;
-  config: LovelaceCardConfig;
-}
-
-export interface FloorplanCardDefinition {
-  id: string;
-  config: LovelaceCardConfig;
-  variants?: FloorplanCardVariantConfig[];
-}
-
-export interface FloorplanCardHostConfig {
-  container_id: string;
-  config?: LovelaceCardConfig;
-  definitions?: FloorplanCardDefinition[];
-  default_definition?: string;
-}
 
 export class FloorplanPageConfig extends FloorplanConfig {
   page_id!: string;
