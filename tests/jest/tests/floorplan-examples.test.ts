@@ -1,4 +1,6 @@
 import '@testing-library/jest-dom';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import '../../../src/components/floorplan-examples/floorplan-examples';
 import { FloorplanExampleElement } from '../../../src/components/floorplan-examples/floorplan-example';
 import {
@@ -6,7 +8,13 @@ import {
   SimulationProcessor,
 } from '../../../src/components/floorplan-examples/hass-simulator';
 import { FloorplanElement } from '../../../src/components/floorplan/floorplan-element';
-import { FloorplanCallServiceActionConfig } from '../../../src/components/floorplan/lib/floorplan-config';
+import {
+  FloorplanCallServiceActionConfig,
+  FloorplanCardHostConfig,
+  FloorplanCardHostVariantConfig,
+  FloorplanConfig,
+} from '../../../src/components/floorplan/lib/floorplan-config';
+import { Utils } from '../../../src/lib/utils';
 import {
   createFloorplanExampleElement,
   getFloorplanElement,
@@ -24,6 +32,82 @@ describe('Constructors for Tests', () => {
     // Remove the floorplan-example element from the DOM
     const element = document.querySelector('floorplan-example');
     if (element) element.remove();
+  });
+
+  it('normalizes card host variants defined as an object map', async () => {
+    const cardsYamlPath = resolve(
+      process.cwd(),
+      'docs/examples/cards/cards.yaml'
+    );
+
+    const cardsConfig = Utils.parseYaml(
+      readFileSync(cardsYamlPath, 'utf-8')
+    ) as { cards: Array<Record<string, unknown>> };
+
+    const livingRoomCard = cardsConfig.cards.find(
+      (card) => card.id === 'living_room_card'
+    ) as Record<string, unknown>;
+
+    const hostConfig = {
+      id: livingRoomCard.id as string,
+      target: livingRoomCard.element as string,
+      container_id: (livingRoomCard.id as string) ?? undefined,
+      card: livingRoomCard.card,
+      variants: livingRoomCard.variants,
+    } as FloorplanCardHostConfig;
+
+    const floorplanElementInstance = document.createElement(
+      'floorplan-element'
+    ) as FloorplanElement;
+    floorplanElementInstance.examplespath = 'examples';
+    floorplanElementInstance.isDemo = true;
+    floorplanElementInstance.notify = () => {};
+    floorplanElementInstance.hass = { states: {} } as any;
+    document.body.appendChild(floorplanElementInstance);
+    await floorplanElementInstance.updateComplete;
+
+    const svg = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'svg'
+    ) as SVGGraphicsElement;
+    const targetElement = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'rect'
+    );
+    targetElement.setAttribute('id', 'living-room-card');
+    svg.appendChild(targetElement);
+
+    const floorplanContainer = floorplanElementInstance.shadowRoot?.getElementById(
+      'floorplan'
+    );
+    floorplanContainer?.appendChild(svg);
+
+    if (typeof (global as unknown as { SVGForeignObjectElement?: unknown })
+      .SVGForeignObjectElement === 'undefined') {
+      (global as unknown as { SVGForeignObjectElement: typeof SVGElement }).SVGForeignObjectElement =
+        class extends SVGElement {};
+    }
+
+    const initCardHosts = (floorplanElementInstance as unknown as {
+      initCardHosts: (svg: SVGGraphicsElement, config: FloorplanConfig) => void;
+    }).initCardHosts;
+
+    const config = { card_hosts: [hostConfig] } as FloorplanConfig;
+    floorplanElementInstance.config = config;
+
+    expect(() =>
+      initCardHosts.call(floorplanElementInstance, svg, config)
+    ).not.toThrow();
+
+    const normalizedVariants = hostConfig
+      .variants as FloorplanCardHostVariantConfig[];
+    expect(Array.isArray(normalizedVariants)).toBe(true);
+    const variantIds = normalizedVariants.map((variant) => variant.id);
+    expect(variantIds).toEqual(
+      expect.arrayContaining(['panel', 'maintenance'])
+    );
+
+    floorplanElementInstance.remove();
   });
 
   it('Will load config YAML from files', async () => {
