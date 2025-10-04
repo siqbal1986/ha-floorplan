@@ -114,6 +114,10 @@ export default (env) => {
       minimizer: [
         new TerserPlugin({
           extractComments: false,
+          include: /floorplan\.js$/,
+          terserOptions: {
+            module: true,
+          },
         }),
       ],
     },
