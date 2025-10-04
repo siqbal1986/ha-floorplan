@@ -40,7 +40,20 @@ export class FloorplanCardHostInfo {
   variants: FloorplanCardHostVariantConfig[] = [];
 
   constructor(public config: FloorplanCardHostConfig) {
-    this.variants = config.variants ?? [];
+    const variants = config.variants;
+
+    if (!variants) {
+      this.variants = [];
+    } else if (Array.isArray(variants)) {
+      this.variants = variants;
+    } else {
+      this.variants = Object.entries(variants).map(
+        ([variantId, variantConfig]) => ({
+          id: variantConfig.id ?? variantId,
+          ...variantConfig,
+        })
+      );
+    }
   }
 }
 

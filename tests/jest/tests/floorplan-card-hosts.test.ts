@@ -47,9 +47,9 @@ describe('Floorplan card hosts', () => {
 
     internal.initCardHosts(svg, internal.config);
 
-    const hosts = Array.from(internal._cardHosts.values());
+    const hosts: any[] = Array.from(internal._cardHosts.values());
     expect(hosts).toHaveLength(1);
-    const host = hosts[0];
+    const host = hosts[0] as any;
 
     expect(svg.querySelector('#overlay-target')).toBe(target);
     expect(target.parentElement).not.toBeNull();
@@ -92,9 +92,9 @@ describe('Floorplan card hosts', () => {
 
     internal.initCardHosts(svg, internal.config);
 
-    const hosts = Array.from(internal._cardHosts.values());
+    const hosts: any[] = Array.from(internal._cardHosts.values());
     expect(hosts).toHaveLength(1);
-    const host = hosts[0];
+    const host = hosts[0] as any;
 
     expect(host.foreignObject.id).toBe('replace-target');
     expect(svg.querySelector('#replace-target')).toBe(host.foreignObject);
@@ -107,5 +107,33 @@ describe('Floorplan card hosts', () => {
     element.hass.states[entityId].state = 'inactive';
     await internal.updateCardHosts(new Set([entityId]));
     expect(host.container.style.pointerEvents).toBe('auto');
+  });
+
+  it('supports declarative cards with pointer passthrough', () => {
+    const { svg, target } = createSvgWithTarget('passthrough-target');
+
+    const config = {
+      cards: [
+        {
+          target: '#passthrough-target',
+          pointer_events: 'passthrough',
+          mode: 'overlay',
+        },
+      ],
+    };
+
+    const element = new FloorplanElement();
+    const internal = element as any;
+    internal.config = config;
+
+    internal.initCardHosts(svg, config);
+
+    const hosts: any[] = Array.from(internal._cardHosts.values());
+    expect(hosts).toHaveLength(1);
+    const host = hosts[0] as any;
+
+    expect(target.parentElement?.contains(host.foreignObject)).toBe(true);
+    expect(host.container.style.pointerEvents).toBe('none');
+    expect(host.autoState.pointerEvents).toBe('passthrough');
   });
 });

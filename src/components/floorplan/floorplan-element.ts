@@ -66,7 +66,7 @@ interface FloorplanCardEntry {
 }
 
 interface FloorplanCardHostAutoState {
-  config?: LovelaceCardConfig;
+  cardConfig?: LovelaceCardConfig;
   visible?: boolean;
   pointerEvents?: string;
   mode?: 'replace' | 'overlay';
@@ -997,7 +997,7 @@ export class FloorplanElement extends LitElement {
 
       if (host && options.source !== 'manual') {
         host.autoState = host.autoState ?? {};
-        host.autoState.config = this.cloneCardConfig(config);
+        host.autoState.cardConfig = this.cloneCardConfig(config);
       }
     } else {
       entry.card = undefined;
@@ -1005,7 +1005,7 @@ export class FloorplanElement extends LitElement {
 
       if (host && options.source !== 'manual') {
         host.autoState = host.autoState ?? {};
-        host.autoState.config = undefined;
+        host.autoState.cardConfig = undefined;
       }
     }
   }
@@ -1022,7 +1022,7 @@ export class FloorplanElement extends LitElement {
         host.foreignObject.remove();
       } else if (
         host.container.isConnected &&
-        host.container.parentElement === host.foreignObject
+        host.container.parentNode === host.foreignObject
       ) {
         host.container.remove();
       }
@@ -1156,7 +1156,10 @@ export class FloorplanElement extends LitElement {
       }
     }
 
-    const replaced = this.replaceElement(target, foreignObject);
+    const replaced = this.replaceElement(
+      target,
+      foreignObject
+    ) as SVGForeignObjectElement;
     replaced.dataset.floorplanCardHost = 'managed';
     return replaced;
   }
@@ -1459,7 +1462,7 @@ export class FloorplanElement extends LitElement {
     host: FloorplanCardHostInternal,
     pointerEvents?: string
   ): void {
-    const value = pointerEvents ?? 'auto';
+    const value = this.normalizeCardHostPointerEvents(pointerEvents);
 
     if (host.currentPointerEvents === value) {
       return;
@@ -1467,6 +1470,14 @@ export class FloorplanElement extends LitElement {
 
     host.currentPointerEvents = value;
     host.container.style.pointerEvents = value;
+  }
+
+  private normalizeCardHostPointerEvents(pointerEvents?: string): string {
+    if (pointerEvents === 'passthrough') {
+      return 'none';
+    }
+
+    return pointerEvents ?? 'auto';
   }
 
   private findCardHostByContainerId(
@@ -1484,15 +1495,15 @@ export class FloorplanElement extends LitElement {
     svg: SVGGraphicsElement,
     config: FloorplanConfig
   ): void {
-    const cardHosts = config.cards ?? config.card_hosts;
+    const cardHosts = config.cards ?? config.card_hosts ?? [];
 
-    if (!cardHosts?.length) {
+    if (!cardHosts.length) {
       return;
     }
 
     const pageId = (config as FloorplanPageConfig).page_id;
 
-    for (const hostConfig of config.card_hosts) {
+    for (const hostConfig of cardHosts) {
       const normalizedSelector =
         hostConfig.target ?? hostConfig.element ?? hostConfig.selector;
 
@@ -1523,7 +1534,7 @@ export class FloorplanElement extends LitElement {
       let isManaged = false;
 
       if (targetElement instanceof SVGForeignObjectElement) {
-        foreignObject = targetElement;
+        foreignObject = targetElement as SVGForeignObjectElement;
       } else {
         foreignObject = this.createForeignObjectFromTarget(
           targetElement,
@@ -1582,7 +1593,7 @@ export class FloorplanElement extends LitElement {
       }
 
       hostEntry.autoState = {
-        config: baseState.cardConfig
+        cardConfig: baseState.cardConfig
           ? this.cloneCardConfig(baseState.cardConfig)
           : undefined,
         visible: baseState.visible,
@@ -1621,12 +1632,19 @@ export class FloorplanElement extends LitElement {
       const state = this.buildCardHostState(host);
       const autoState = host.autoState ?? {};
 
-      const cardChanged = !Utils.equal(autoState.config, state.cardConfig);
+      const cardChanged = !Utils.equal(
+        autoState.cardConfig,
+        state.cardConfig
+      );
       const visibilityChanged =
         state.visible !== undefined &&
         state.visible !== host.currentVisible;
-      const desiredPointerEvents = state.pointerEvents ?? 'auto';
-      const currentPointerEvents = host.currentPointerEvents ?? 'auto';
+      const desiredPointerEvents = this.normalizeCardHostPointerEvents(
+        state.pointerEvents
+      );
+      const currentPointerEvents = this.normalizeCardHostPointerEvents(
+        host.currentPointerEvents
+      );
       const pointerEventsChanged = desiredPointerEvents !== currentPointerEvents;
 
       if (!cardChanged && !visibilityChanged && !pointerEventsChanged) {
@@ -1638,7 +1656,7 @@ export class FloorplanElement extends LitElement {
       }
 
       host.autoState = {
-        config: state.cardConfig
+        cardConfig: state.cardConfig
           ? this.cloneCardConfig(state.cardConfig)
           : undefined,
         visible: state.visible,
