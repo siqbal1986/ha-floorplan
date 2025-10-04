@@ -4,8 +4,7 @@ import {
   FloorplanRuleConfig,
   FloorplanActionConfig,
   FloorplanCardHostConfig,
-  FloorplanCardDefinition,
-  FloorplanCardVariantConfig,
+  FloorplanCardHostVariantConfig,
 } from './floorplan-config';
 
 export class FloorplanPageInfo {
@@ -37,20 +36,12 @@ export class FloorplanRuleInfo {
   constructor(public rule: FloorplanRuleConfig) {}
 }
 
-export class FloorplanCardVariantInfo {
-  constructor(public config: FloorplanCardVariantConfig) {}
-}
-
-export class FloorplanCardDefinitionInfo {
-  variants: FloorplanCardVariantInfo[] = [];
-
-  constructor(public config: FloorplanCardDefinition) {}
-}
-
 export class FloorplanCardHostInfo {
-  definitions: FloorplanCardDefinitionInfo[] = [];
+  variants: FloorplanCardHostVariantConfig[] = [];
 
-  constructor(public config: FloorplanCardHostConfig) {}
+  constructor(public config: FloorplanCardHostConfig) {
+    this.variants = config.variants ?? [];
+  }
 }
 
 export class FloorplanEntityInfo {

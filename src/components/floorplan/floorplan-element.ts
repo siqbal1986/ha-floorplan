@@ -68,6 +68,8 @@ interface FloorplanCardEntry {
 interface FloorplanCardHostAutoState {
   config?: LovelaceCardConfig;
   visible?: boolean;
+  pointerEvents?: string;
+  mode?: 'replace' | 'overlay';
 }
 
 interface FloorplanCardHostInternal {
@@ -83,6 +85,7 @@ interface FloorplanCardHostInternal {
   isForeignObjectManaged: boolean;
   autoState?: FloorplanCardHostAutoState;
   currentVisible?: boolean;
+  currentPointerEvents?: string;
 }
 
 declare let NAME: string;
@@ -1134,6 +1137,25 @@ export class FloorplanElement extends LitElement {
       );
     }
 
+    const mode = hostConfig.mode ?? 'replace';
+
+    if (mode === 'overlay') {
+      const parent = target.parentNode;
+      if (parent) {
+        const wrapper = document.createElementNS(
+          'http://www.w3.org/2000/svg',
+          'g'
+        );
+        (wrapper as SVGGraphicsElement).dataset.floorplanCardHostWrapper = 'managed';
+        parent.replaceChild(wrapper, target);
+        wrapper.appendChild(target);
+        wrapper.appendChild(foreignObject);
+
+        foreignObject.dataset.floorplanCardHost = 'managed';
+        return foreignObject;
+      }
+    }
+
     const replaced = this.replaceElement(target, foreignObject);
     replaced.dataset.floorplanCardHost = 'managed';
     return replaced;
@@ -1171,7 +1193,7 @@ export class FloorplanElement extends LitElement {
 
     hostConfig.entities?.forEach((entity) => addEntity(entity));
 
-    for (const variant of hostConfig.variants ?? []) {
+    for (const variant of this.ensureCardHostVariants(hostConfig)) {
       variant.entities?.forEach((entity) => addEntity(entity));
       for (const condition of variant.conditions ?? []) {
         addEntity(condition.entity);
@@ -1179,6 +1201,55 @@ export class FloorplanElement extends LitElement {
     }
 
     return entities;
+  }
+
+  private ensureCardHostVariants(
+    hostConfig: FloorplanCardHostConfig
+  ): FloorplanCardHostVariantConfig[] {
+    const { variants } = hostConfig;
+
+    if (!variants) {
+      return [];
+    }
+
+    if (Array.isArray(variants)) {
+      return variants;
+    }
+
+    if (this.isPlainObject(variants)) {
+      const normalized = Object.entries(variants).map(
+        ([variantId, variantConfig]) => {
+          const normalizedVariant: FloorplanCardHostVariantConfig =
+            this.isPlainObject(variantConfig)
+              ? { ...(variantConfig as FloorplanCardHostVariantConfig) }
+              : {};
+
+          if (!normalizedVariant.id) {
+            normalizedVariant.id = variantId;
+          }
+
+          return normalizedVariant;
+        }
+      );
+
+      hostConfig.variants = normalized;
+      return normalized;
+    }
+
+    return [];
+  }
+
+  private isPlainObject(value: unknown): value is Record<string, unknown> {
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      Array.isArray(value)
+    ) {
+      return false;
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
   }
 
   private buildCardHostBaseState(
@@ -1196,6 +1267,14 @@ export class FloorplanElement extends LitElement {
       state.visible = config.options.visible;
     }
 
+    if (config.pointer_events !== undefined) {
+      state.pointerEvents = config.pointer_events;
+    }
+
+    if (config.mode) {
+      state.mode = config.mode;
+    }
+
     return state;
   }
 
@@ -1204,7 +1283,7 @@ export class FloorplanElement extends LitElement {
   ): FloorplanCardHostAutoState {
     const state = this.buildCardHostBaseState(host.config);
 
-    for (const variant of host.config.variants ?? []) {
+    for (const variant of this.ensureCardHostVariants(host.config)) {
       if (!this.evaluateCardHostVariant(variant)) {
         continue;
       }
@@ -1219,6 +1298,14 @@ export class FloorplanElement extends LitElement {
         state.visible = variant.visible;
       } else if (variant.options?.visible !== undefined) {
         state.visible = variant.options.visible;
+      }
+
+      if (variant.pointer_events !== undefined) {
+        state.pointerEvents = variant.pointer_events;
+      }
+
+      if (variant.mode) {
+        state.mode = variant.mode;
       }
     }
 
@@ -1368,6 +1455,20 @@ export class FloorplanElement extends LitElement {
     host.container.style.display = visible ? '' : 'none';
   }
 
+  private applyCardHostPointerEvents(
+    host: FloorplanCardHostInternal,
+    pointerEvents?: string
+  ): void {
+    const value = pointerEvents ?? 'auto';
+
+    if (host.currentPointerEvents === value) {
+      return;
+    }
+
+    host.currentPointerEvents = value;
+    host.container.style.pointerEvents = value;
+  }
+
   private findCardHostByContainerId(
     containerId: string
   ): FloorplanCardHostInternal | undefined {
@@ -1383,7 +1484,9 @@ export class FloorplanElement extends LitElement {
     svg: SVGGraphicsElement,
     config: FloorplanConfig
   ): void {
-    if (!config.card_hosts?.length) {
+    const cardHosts = config.cards ?? config.card_hosts;
+
+    if (!cardHosts?.length) {
       return;
     }
 
@@ -1398,6 +1501,7 @@ export class FloorplanElement extends LitElement {
       }
 
       const targetSelector = normalizedSelector;
+
       const targetElement = this.resolveCardHostTarget(svg, hostConfig);
       if (!targetElement) {
         this.logWarning(
@@ -1436,6 +1540,8 @@ export class FloorplanElement extends LitElement {
         hostConfig.id ??
         (pageId ? `${pageId}-${containerId}` : containerId);
 
+      const baseState = this.buildCardHostBaseState(hostConfig);
+
       const container = this.ensureCardHostContainerElement(
         foreignObject,
         hostId
@@ -1462,7 +1568,8 @@ export class FloorplanElement extends LitElement {
       this._cardHostContainers.set(containerId, hostId);
       this._cards.set(containerId, { container, hostId });
 
-      const baseState = this.buildCardHostBaseState(hostConfig);
+      this.applyCardHostPointerEvents(hostEntry, baseState.pointerEvents);
+
       if (baseState.visible !== undefined) {
         this.applyCardHostVisibility(hostEntry, baseState.visible);
       }
@@ -1472,13 +1579,16 @@ export class FloorplanElement extends LitElement {
           source: hostEntry.overrideSource,
           visible: baseState.visible,
         });
-        hostEntry.autoState = {
-          config: baseState.cardConfig
-            ? this.cloneCardConfig(baseState.cardConfig)
-            : undefined,
-          visible: baseState.visible,
-        };
       }
+
+      hostEntry.autoState = {
+        config: baseState.cardConfig
+          ? this.cloneCardConfig(baseState.cardConfig)
+          : undefined,
+        visible: baseState.visible,
+        pointerEvents: baseState.pointerEvents,
+        mode: baseState.mode,
+      };
     }
   }
 
@@ -1515,9 +1625,16 @@ export class FloorplanElement extends LitElement {
       const visibilityChanged =
         state.visible !== undefined &&
         state.visible !== host.currentVisible;
+      const desiredPointerEvents = state.pointerEvents ?? 'auto';
+      const currentPointerEvents = host.currentPointerEvents ?? 'auto';
+      const pointerEventsChanged = desiredPointerEvents !== currentPointerEvents;
 
-      if (!cardChanged && !visibilityChanged) {
+      if (!cardChanged && !visibilityChanged && !pointerEventsChanged) {
         continue;
+      }
+
+      if (pointerEventsChanged) {
+        this.applyCardHostPointerEvents(host, state.pointerEvents);
       }
 
       host.autoState = {
@@ -1525,12 +1642,16 @@ export class FloorplanElement extends LitElement {
           ? this.cloneCardConfig(state.cardConfig)
           : undefined,
         visible: state.visible,
+        pointerEvents: state.pointerEvents,
+        mode: state.mode,
       };
 
-      await this.setCard(host.containerId, state.cardConfig, {
-        source: 'auto',
-        visible: state.visible,
-      });
+      if (cardChanged || visibilityChanged) {
+        await this.setCard(host.containerId, state.cardConfig, {
+          source: 'auto',
+          visible: state.visible,
+        });
+      }
     }
   }
 
@@ -2317,12 +2438,13 @@ export class FloorplanElement extends LitElement {
 
     const hasPages = Array.isArray(config.pages) && config.pages.length > 0;
     const hasRules = Array.isArray(config.rules) && config.rules.length > 0;
-    const hasCards = Array.isArray(config.cards) && config.cards.length > 0;
+    const cardHosts = config.cards ?? config.card_hosts;
+    const hasCards = Array.isArray(cardHosts) && cardHosts.length > 0;
 
     if (!hasPages && !hasRules && !hasCards) {
       this.logWarning(
         'CONFIG',
-        `Cannot find 'pages', 'rules', or 'cards' in floorplan configuration`
+        `Cannot find 'pages', 'rules', 'cards', or 'card_hosts' in floorplan configuration`
       );
       //isValid = false;
     } else {
@@ -2338,7 +2460,7 @@ export class FloorplanElement extends LitElement {
         if (!hasRules && !hasCards) {
           this.logWarning(
             'CONFIG',
-            `Cannot find 'rules' or 'cards' in floorplan configuration`
+            `Cannot find 'rules', 'cards', or 'card_hosts' in floorplan configuration`
           );
           //isValid = false;
         }

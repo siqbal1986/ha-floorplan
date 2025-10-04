@@ -18,7 +18,6 @@ import {
   FloorplanSvgElementInfo,
   FloorplanRuleInfo
 } from './floorplan-info';
-import { LovelaceCardConfig } from '../../../lib/homeassistant/data/lovelace';
 
 export class FloorplanConfig {
   // Core features
@@ -27,6 +26,9 @@ export class FloorplanConfig {
   log_level!: string;
   console_log_level!: string;
   rules!: FloorplanRuleConfig[];
+  /**
+   * @deprecated Use `cards` instead.
+   */
   card_hosts?: FloorplanCardHostConfig[];
 
   // Optional features
@@ -38,7 +40,7 @@ export class FloorplanConfig {
   defaults!: FloorplanRuleConfig;
   image_mobile!: FloorplanImageConfig | string;
   functions!: string;
-  cards!: FloorplanCardHostConfig[];
+  cards?: FloorplanCardHostConfig[];
 
   // Experimental features
   pages!: string[];
@@ -71,24 +73,6 @@ export type FloorplanActionConfig =
   | NoActionConfig
   | CustomActionConfig
   | HoverInfoActionConfig;
-
-export interface FloorplanCardVariantConfig {
-  id: string;
-  config: LovelaceCardConfig;
-}
-
-export interface FloorplanCardDefinition {
-  id: string;
-  config: LovelaceCardConfig;
-  variants?: FloorplanCardVariantConfig[];
-}
-
-export interface FloorplanCardHostConfig {
-  container_id: string;
-  config?: LovelaceCardConfig;
-  definitions?: FloorplanCardDefinition[];
-  default_definition?: string;
-}
 
 export class FloorplanPageConfig extends FloorplanConfig {
   page_id!: string;
@@ -161,6 +145,8 @@ export interface FloorplanCardHostStateConfig {
   card?: LovelaceCardConfig;
   visible?: boolean;
   options?: FloorplanCardSetOptions;
+  mode?: 'replace' | 'overlay';
+  pointer_events?: string;
 }
 
 export interface FloorplanCardHostConditionConfig {
@@ -176,9 +162,14 @@ export interface FloorplanCardHostConditionConfig {
 
 export interface FloorplanCardHostVariantConfig
   extends FloorplanCardHostStateConfig {
+  id?: string;
   conditions?: FloorplanCardHostConditionConfig[];
   entities?: string[];
 }
+
+export type FloorplanCardHostVariantsConfig =
+  | FloorplanCardHostVariantConfig[]
+  | Record<string, FloorplanCardHostVariantConfig>;
 
 export interface FloorplanCardHostConfig
   extends FloorplanCardHostStateConfig {
@@ -188,7 +179,7 @@ export interface FloorplanCardHostConfig
   element?: string;
   container_id?: string;
   entities?: string[];
-  variants?: FloorplanCardHostVariantConfig[];
+  variants?: FloorplanCardHostVariantsConfig;
   foreign_object?: {
     width?: number;
     height?: number;
