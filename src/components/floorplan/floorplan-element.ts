@@ -1034,7 +1034,8 @@ export class FloorplanElement extends LitElement {
     svg: SVGGraphicsElement,
     hostConfig: FloorplanCardHostConfig
   ): SVGGraphicsElement | null {
-    const selector = hostConfig.target ?? hostConfig.element;
+    const selector =
+      hostConfig.target ?? hostConfig.element ?? hostConfig.selector;
 
     if (!selector) {
       return null;
@@ -1389,11 +1390,14 @@ export class FloorplanElement extends LitElement {
     const pageId = (config as FloorplanPageConfig).page_id;
 
     for (const hostConfig of config.card_hosts) {
-      if (!hostConfig.target && hostConfig.element) {
-        hostConfig.target = hostConfig.element;
+      const normalizedSelector =
+        hostConfig.target ?? hostConfig.element ?? hostConfig.selector;
+
+      if (!hostConfig.target && normalizedSelector) {
+        hostConfig.target = normalizedSelector;
       }
 
-      const targetSelector = hostConfig.target ?? hostConfig.element;
+      const targetSelector = normalizedSelector;
       const targetElement = this.resolveCardHostTarget(svg, hostConfig);
       if (!targetElement) {
         this.logWarning(
@@ -2379,7 +2383,9 @@ export class FloorplanElement extends LitElement {
 
         seenHosts.add(host);
 
-        if (!host.target && !host.element) {
+        const selector = host.target ?? host.element ?? host.selector;
+
+        if (!selector) {
           invalidCardHosts.push(host);
         }
       }
@@ -2391,7 +2397,7 @@ export class FloorplanElement extends LitElement {
     if (invalidCardHosts.length) {
       this.logWarning(
         'CONFIG',
-        `Card host entries should define 'target' or 'element' in floorplan configuration`
+        `Card host entries should define 'target', 'element', or 'selector' in floorplan configuration`
       );
     }
 

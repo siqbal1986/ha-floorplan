@@ -146,9 +146,34 @@ config:
       cards?: unknown[];
     };
 
+    const aliasHosts = Array.isArray(cardsConfig.cards)
+      ? cardsConfig.cards.map((host, index) => {
+          if (!host || typeof host !== 'object') {
+            return host;
+          }
+
+          if (index > 0) {
+            return host;
+          }
+
+          const hostRecord = { ...(host as Record<string, unknown>) };
+          const fallbackSelector = (
+            hostRecord.target ?? hostRecord.element
+          ) as string | undefined;
+
+          delete hostRecord.target;
+
+          if (fallbackSelector) {
+            hostRecord.selector = fallbackSelector;
+          }
+
+          return hostRecord;
+        })
+      : cardsConfig.cards;
+
     const normalizedCardsConfig = {
       ...cardsConfig,
-      card_hosts: cardsConfig.cards,
+      card_hosts: aliasHosts,
     };
 
     const configYaml = `title: Cards Example\nconfig:\n${indentYaml(
@@ -199,8 +224,8 @@ config:
       expect(floorplanElementInstance.config.card_hosts?.length).toBeGreaterThan(0);
 
       const resolvedTargets =
-        floorplanElementInstance.config.card_hosts?.map(
-          (host) => host.target ?? host.element
+        floorplanElementInstance.config.card_hosts?.map((host) =>
+          host.target ?? host.element ?? host.selector
         ) ?? [];
 
       expect(resolvedTargets).toContain('#living-room-card');
