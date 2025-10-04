@@ -174,7 +174,9 @@ export type FloorplanCardHostVariantsConfig =
 export interface FloorplanCardHostConfig
   extends FloorplanCardHostStateConfig {
   id?: string;
-  target: string;
+  target?: string;
+  selector?: string;
+  element?: string;
   container_id?: string;
   entities?: string[];
   variants?: FloorplanCardHostVariantsConfig;
