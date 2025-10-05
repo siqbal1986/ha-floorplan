@@ -3,16 +3,16 @@ import { promises as fs } from 'fs';
 import { fileURLToPath } from 'url';
 import TerserPlugin from 'terser-webpack-plugin';
 import CopyPlugin from 'copy-webpack-plugin';
-import webpack from 'webpack'; // Import the default export
+import webpack from 'webpack';
 import packageInfo from './package.json' with { type: 'json' };
 
-const { DefinePlugin } = webpack; // Destructure DefinePlugin from the default export
+const { DefinePlugin } = webpack;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export default (env) => {
-  const isProduction = env.production;
+export default (env = {}) => {
+  const isProduction = !!env.production;
 
   class CopyFloorplanToRootPlugin {
     constructor({ filename, destinationDir }) {
@@ -52,19 +52,7 @@ export default (env) => {
 
   const plugins = isProduction
     ? [
-        new CopyPlugin({
-          patterns: [
-            {
-              from: path.resolve(__dirname, 'dist', 'floorplan-examples.js'),
-              to: path.resolve(__dirname, 'docs', '_docs', 'floorplan'),
-              force: true,
-              noErrorOnMissing: true, // Prevent errors if the file doesn't exist yet
-            },
-          ],
-          options: {
-            concurrency: 100, // Workaround to ensure copying is done after the build
-          },
-        }),
+        // Keep distribution simple for HA: only produce floorplan.js
         new CopyFloorplanToRootPlugin({
           filename: 'floorplan.js',
           destinationDir: __dirname,
@@ -76,7 +64,6 @@ export default (env) => {
     mode: isProduction ? 'production' : 'development',
     entry: {
       floorplan: './src/index.ts',
-      'floorplan-examples': './src/components/floorplan-examples/floorplan-examples.ts',
     },
     devtool: isProduction ? undefined : 'inline-source-map',
     module: {
@@ -110,16 +97,14 @@ export default (env) => {
       outputModule: true, // Enable ES Module output
     },
     optimization: {
-      minimize: true,
-      minimizer: [
-        new TerserPlugin({
-          extractComments: false,
-          include: /floorplan\.js$/,
-          terserOptions: {
-            module: true,
-          },
-        }),
-      ],
+      minimize: isProduction,
+      minimizer: isProduction
+        ? [
+            new TerserPlugin({
+              extractComments: false,
+            }),
+          ]
+        : [],
     },
     performance: {
       hints: false,

@@ -3220,6 +3220,9 @@ export class FloorplanElement extends LitElement {
           );
           break;
         }
+        console.log('SHAHZAD: set_page_list stored keys', Object.keys(this.pageLayers||{}));
+        console.log('SHAHZAD: set_page_list layer id set size', this.pageLayerIds ? this.pageLayerIds.size : 0);
+      
 
         this.pageLayers = parsedPageLayers;
         this.pageLayerIds = new Set<string>();
@@ -3234,42 +3237,26 @@ export class FloorplanElement extends LitElement {
 
       case 'set_page': {
         if (!Object.keys(this.pageLayers).length) {
-          this.logWarning(
-            'FLOORPLAN_ACTION',
-            'No page list available. Call floorplan.set_page_list before floorplan.set_page.'
-          );
-          console.log(
-            '[floorplan.set_page] Missing page list. Current pageLayers:',
-            this.pageLayers
-          );
+          this.logWarning('FLOORPLAN_ACTION','No page list available. Call floorplan.set_page_list before floorplan.set_page.');
+          console.log('SHAHZAD: set_page missing page list');
           break;
         }
-
         const setPageServiceData = serviceData ?? actionConfig.service_data;
-        console.log(
-          '[floorplan.set_page] Incoming service data:',
-          setPageServiceData
-        );
-
+        console.log('SHAHZAD: set_page service data', setPageServiceData);
         const pageName = this.getPageNameFromServiceData(setPageServiceData);
-        console.log('[floorplan.set_page] Resolved page name:', pageName);
-
+        console.log('SHAHZAD: set_page resolved page', pageName);
         if (!pageName) {
-          this.logWarning(
-            'CONFIG',
-            'floorplan.set_page requires a page name to be provided in service data.'
-          );
-          console.log('[floorplan.set_page] No page name provided.');
+          this.logWarning('CONFIG','floorplan.set_page requires a page name to be provided in service data.');
+          console.log('SHAHZAD: set_page missing page name');
           break;
         }
-
-        console.log(
-          '[floorplan.set_page] Applying page layer visibility for page:',
-          pageName
-        );
+        const ids = this.pageLayers[pageName] || [];
+        console.log('SHAHZAD: set_page layers for page', pageName, ids);
         this.applyPageLayerVisibility(pageName);
+        console.log('SHAHZAD: set_page applied');
         break;
       }
+      
 
       case 'variable_set':
         serviceData = this.getServiceData(
@@ -3610,7 +3597,7 @@ export class FloorplanElement extends LitElement {
 
     return undefined;
   }
-
+  
   private applyPageLayerVisibility(pageName: string): void {
     const layerIds = this.pageLayers[pageName];
     if (!layerIds || !layerIds.length) {
@@ -3638,6 +3625,14 @@ export class FloorplanElement extends LitElement {
       }
     }
 
+    console.log('SHAHZAD: applyPageLayerVisibility page', pageName, 'layers', layerIds);
+    let found = 0, missing: string[] = [];
+    for (const lid of layerIds) {
+      const els = this.getLayerElementsById(lid);
+      if (els.length) { found += els.length; } else { missing.push(lid); }
+    }
+    console.log('SHAHZAD: applyPageLayerVisibility found elements', found, 'missing', missing);
+
     const activeLayerSet = new Set(layerIds);
     this.currentPageName = pageName;
 
@@ -3652,13 +3647,11 @@ export class FloorplanElement extends LitElement {
 
       for (const element of layerElements) {
         if (element.dataset['floorplanOriginalDisplay'] === undefined) {
-          element.dataset['floorplanOriginalDisplay'] =
-            element.style.display || '';
+          element.dataset['floorplanOriginalDisplay'] = element.style.display || '';
         }
 
         if (activeLayerSet.has(layerId)) {
-          const originalDisplay =
-            element.dataset['floorplanOriginalDisplay'] ?? '';
+          const originalDisplay = element.dataset['floorplanOriginalDisplay'] ?? '';
           if (originalDisplay) {
             element.style.display = originalDisplay;
           } else {
@@ -3767,11 +3760,15 @@ export class FloorplanElement extends LitElement {
 
   handleEventActionCall(event: Event) {
     const customEvent = event as CustomEvent<FloorplanEventActionCallDetail>;
-    const { actionConfig, entityId, svgElementInfo, ruleInfo  } = customEvent.detail;
-
+    const { actionConfig, entityId, svgElementInfo, ruleInfo } = customEvent.detail;
+    console.log('SHAHZAD: action-call', {
+      service: (actionConfig as any).service,
+      entityId,
+      el: (svgElementInfo?.svgElement?.id),
+      rule: (ruleInfo?.rule?.element),
+    });
     actionConfig._is_internal_action_scope = true;
     this.handleActions(actionConfig, entityId, svgElementInfo, ruleInfo);
-
     //this.callService(actionConfig, entityId, svgElementInfo, ruleInfo);
   }
 
