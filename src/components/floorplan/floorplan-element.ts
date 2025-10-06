@@ -129,6 +129,8 @@ export class FloorplanElement extends LitElement {
   private _cards: Map<string, FloorplanCardEntry> = new Map();
   private _cardHosts: Map<string, FloorplanCardHostInternal> = new Map();
   private _cardHostContainers: Map<string, string> = new Map();
+  private _naturalSizeCache: Map<string, { width: number; height: number }> = new Map();
+  private _stagingContainer?: HTMLDivElement;
 
   constructor() {
     super();
@@ -993,7 +995,9 @@ export class FloorplanElement extends LitElement {
       }
 
       entry.card = card;
-      entry.container.replaceChildren(card);
+      const fitMode = (host?.config?.fit ?? 'fill') as 'fill' | 'contain' | 'cover' | 'none';
+      const baseline = this.parseDefaultSize(host?.config?.default_size) ?? { width: 420, height: 420 };
+      await this.mountCardWithFixedBaseline(entry.container, card as unknown as HTMLElement, fitMode, baseline);
 
       if (host && options.source !== 'manual') {
         host.autoState = host.autoState ?? {};
@@ -1009,6 +1013,180 @@ export class FloorplanElement extends LitElement {
       }
     }
   }
+
+  private async mountCardWithFixedBaseline(container: Element, cardEl: HTMLElement, fit: 'fill' | 'contain' | 'cover' | 'none', baseline: { width: number; height: number }): Promise<void> {
+    const scaleWrap = document.createElement('div');
+    scaleWrap.className = 'floorplan-card-scale-wrap';
+    scaleWrap.style.width = '100%';
+    scaleWrap.style.height = '100%';
+    scaleWrap.style.display = 'block';
+    scaleWrap.style.overflow = 'hidden';
+    scaleWrap.style.transformOrigin = 'top left';
+    (scaleWrap.style as any).willChange = 'transform';
+    (container as HTMLElement).replaceChildren(scaleWrap);
+
+    scaleWrap.appendChild(cardEl);
+
+    const applyScale = () => {
+      const fo = container.parentElement as unknown as SVGForeignObjectElement | null;
+      if (!fo) return;
+      // Host dimensions in SVG user units from original bbox stored on FO attributes at creation time
+      const hostX = Number.parseFloat(fo.getAttribute('x') || '0');
+      const hostY = Number.parseFloat(fo.getAttribute('y') || '0');
+      const hostW = Number.parseFloat(fo.getAttribute('width') || '0');
+      const hostH = Number.parseFloat(fo.getAttribute('height') || '0');
+      if (!(hostW > 0 && hostH > 0)) {
+        return;
+      }
+      const baseW = Math.max(1, baseline.width);
+      const baseH = Math.max(1, baseline.height);
+      const sx = hostW / baseW;
+      const sy = hostH / baseH;
+      const mode = fit === 'fill' ? 'cover' : fit;
+      let s = 1;
+      if (mode === 'contain') s = Math.min(sx, sy); else if (mode === 'cover') s = Math.max(sx, sy); else if (mode === 'none') s = 1;
+      const dx = Math.max(0, (hostW - baseW * s) / 2);
+      const dy = Math.max(0, (hostH - baseH * s) / 2);
+      // Position the FO via transform; set its own size to baseline
+      fo.setAttribute('width', `${baseW}`);
+      fo.setAttribute('height', `${baseH}`);
+      fo.setAttribute('x', `0`);
+      fo.setAttribute('y', `0`);
+      const existing = fo.getAttribute('transform') || '';
+      const composed = `${existing ? existing + ' ' : ''}translate(${(hostX + dx).toFixed(4)} ${(hostY + dy).toFixed(4)}) scale(${s.toFixed(6)})`;
+      fo.setAttribute('transform', composed);
+      // Ensure wrapper has no CSS transform; scaling is at FO level
+      scaleWrap.style.transform = '';
+      
+    };
+
+    try {
+      const ro = new (window as any).ResizeObserver(() => applyScale());
+      ro.observe(container as Element);
+      const fo = container.parentElement as Element | null;
+      if (fo) ro.observe(fo);
+    } catch {}
+
+    try {
+      const io = new (window as any).IntersectionObserver((entries: any[]) => {
+        for (const e of entries) if (e.isIntersecting) applyScale();
+      }, { root: null, threshold: 0 });
+      io.observe(container as Element);
+    } catch {}
+
+    await this.nextFrame();
+    applyScale();
+  }
+
+  private parseDefaultSize(input?: number | string | [number, number] | { width: number; height: number }): { width: number; height: number } | undefined {
+    if (input === undefined || input === null) return undefined;
+    if (typeof input === 'number' && isFinite(input) && input > 0) return { width: input, height: input };
+    if (Array.isArray(input) && input.length >= 2) {
+      const w = Number(input[0]); const h = Number(input[1]);
+      if (isFinite(w) && isFinite(h) && w > 0 && h > 0) return { width: w, height: h };
+    }
+    if (typeof input === 'object' && (input as any).width && (input as any).height) {
+      const w = Number((input as any).width); const h = Number((input as any).height);
+      if (isFinite(w) && isFinite(h) && w > 0 && h > 0) return { width: w, height: h };
+    }
+    if (typeof input === 'string') {
+      const cleaned = input.toLowerCase().replace(/×|x/i, 'x').replace(/\s+/g, '');
+      const m = cleaned.match(/^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$/);
+      if (m) {
+        const w = Number(m[1]); const h = Number(m[2]);
+        if (isFinite(w) && isFinite(h) && w > 0 && h > 0) return { width: w, height: h };
+      }
+    }
+    return undefined;
+  }
+
+  private getCardSignature(cardEl: HTMLElement): string {
+    const tag = cardEl.tagName.toLowerCase();
+    const cfg = (cardEl as any).config ?? (cardEl as any)._config ?? {};
+    let cfgStr = '';
+    try { cfgStr = JSON.stringify(cfg); } catch { cfgStr = String(cfg); }
+    return `${tag}:${cfgStr}`;
+  }
+
+  private getOrCreateStagingContainer(): HTMLDivElement {
+    if (this._stagingContainer && this._stagingContainer.isConnected) return this._stagingContainer;
+    const el = document.createElement('div');
+    el.id = 'floorplan-staging';
+    el.style.position = 'fixed';
+    el.style.left = '-10000px';
+    el.style.top = '-10000px';
+    // Provide ample width so responsive cards get a stable layout while measuring
+    el.style.width = '1000px';
+    el.style.height = 'auto';
+    // Keep it in layout but nearly invisible
+    el.style.opacity = '0.001';
+    el.style.pointerEvents = 'none';
+    el.style.fontSize = '16px';
+    (el.style as any).contain = 'layout style paint';
+    this.shadowRoot?.appendChild(el);
+    this._stagingContainer = el;
+    return el;
+  }
+
+  private findTightContentNode(cardEl: HTMLElement): HTMLElement {
+    const sr = ((cardEl as any).shadowRoot || (cardEl as any).renderRoot) as ShadowRoot | undefined;
+    if (!sr) return cardEl;
+
+    // 1) Prefer known control element for built-in thermostat
+    const slider = sr.querySelector('ha-control-circular-slider') as HTMLElement | null;
+    if (slider) {
+      const sroot = (slider as any).shadowRoot as ShadowRoot | undefined;
+      const svg = sroot?.querySelector('svg#slider, svg') as HTMLElement | null;
+      if (svg) return svg as HTMLElement;
+      return slider; // fallback to host
+    }
+
+    // 2) Prefer known dial node from popular custom cards
+    const dial = sr.querySelector('.dial') as HTMLElement | null;
+    if (dial) return dial as HTMLElement;
+
+    // 3) Otherwise, score candidates by area and squareness to avoid headers (wide/short)
+    const all = Array.from(sr.querySelectorAll<HTMLElement>('*'));
+    let best: HTMLElement | null = null;
+    let bestScore = -1;
+    const maxScan = Math.min(all.length, 1500);
+    for (let i = 0; i < maxScan; i++) {
+      const el = all[i];
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'p' || tag === 'h1' || tag === 'h2' || tag === 'h3') continue;
+      const cls = el.className ? String(el.className) : '';
+      if (/title|header|subtitle/i.test(cls)) continue;
+      const r = el.getBoundingClientRect();
+      const w = r.width;
+      const h = r.height;
+      if (!(w > 40 && h > 40)) continue; // ignore tiny or line-height elements
+      const area = w * h;
+      const square = Math.min(w, h) / Math.max(w, h); // 1 = square, ~0 = very wide/tall
+      const score = area * square * square; // bias square-ish blocks
+      if (score > bestScore) {
+        best = el;
+        bestScore = score;
+      }
+    }
+
+    if (best) return best;
+
+    // 4) Fallback: first child of ha-card, then ha-card itself
+    const haCard = sr.querySelector('ha-card') as HTMLElement | null;
+    if (haCard && haCard.firstElementChild) return haCard.firstElementChild as HTMLElement;
+    return haCard ?? cardEl;
+  }
+
+  private async afterRender(cardEl: HTMLElement): Promise<void> {
+    await this.nextFrame();
+    const maybe = (cardEl as any).updateComplete;
+    if (maybe && typeof (maybe as Promise<unknown>).then === 'function') {
+      try { await (maybe as Promise<unknown>); } catch {}
+    }
+    await this.nextFrame();
+  }
+
+  private nextFrame(): Promise<void> { return new Promise((r) => requestAnimationFrame(() => r())); }
 
   private resetCardHosts(): void {
     for (const entry of this._cards.values()) {
@@ -1176,6 +1354,8 @@ export class FloorplanElement extends LitElement {
     container.setAttribute('data-floorplan-card-host-container', hostId);
     container.style.width = '100%';
     container.style.height = '100%';
+    container.style.display = 'block';
+    container.style.overflow = 'hidden';
     container.style.pointerEvents = 'auto';
 
     foreignObject.replaceChildren(container);
@@ -1522,6 +1702,22 @@ export class FloorplanElement extends LitElement {
         continue;
       }
 
+      // Debug/diagnostic: compute and log target element size in both SVG units and CSS pixels
+      try {
+        const size = this.measureSvgElementSize(targetElement);
+        console.debug(
+          'FLOORPLAN_CARD_HOST_TARGET_SIZE',
+          {
+            target: targetSelector,
+            id: (targetElement as SVGGraphicsElement).id,
+            svgUnits: size.svg,
+            screenPx: size.screen,
+          }
+        );
+      } catch (_) {
+        // ignore
+      }
+
       const originalId = targetElement.id;
       const baseId =
         hostConfig.container_id ??
@@ -1601,6 +1797,104 @@ export class FloorplanElement extends LitElement {
         mode: baseState.mode,
       };
     }
+  }
+
+  /**
+   * Measures an SVG element in both SVG user units (via getBBox) and CSS pixels (via getBoundingClientRect/getScreenCTM).
+   */
+  private measureSvgElementSize(element: SVGGraphicsElement): {
+    svg: { x: number; y: number; width: number; height: number };
+    screen: { left: number; top: number; width: number; height: number };
+    visibility?: { isConnected: boolean; hiddenAt?: string; chain?: string[] };
+  } {
+    // 1) SVG units via getBBox, with attribute fallbacks for elements like foreignObject
+    let bx = 0, by = 0, bw = 0, bh = 0;
+    try {
+      const bb = element.getBBox ? element.getBBox() : ({ x: 0, y: 0, width: 0, height: 0 } as DOMRect);
+      bx = bb.x || 0; by = bb.y || 0; bw = bb.width || 0; bh = bb.height || 0;
+    } catch (_) {}
+
+    if (!(bw > 0 && bh > 0)) {
+      const aw = parseFloat(element.getAttribute('width') || '0');
+      const ah = parseFloat(element.getAttribute('height') || '0');
+      if (aw > 0 && ah > 0) {
+        bw = aw; bh = ah;
+        const ax = parseFloat(element.getAttribute('x') || '0');
+        const ay = parseFloat(element.getAttribute('y') || '0');
+        bx = isNaN(ax) ? bx : ax;
+        by = isNaN(ay) ? by : ay;
+      }
+    }
+
+    // 2) CSS pixel rect via getBoundingClientRect, with getScreenCTM and viewBox fallbacks
+    const rect = element.getBoundingClientRect();
+    let left = rect.left;
+    let top = rect.top;
+    let width = rect.width;
+    let height = rect.height;
+
+    const root = (element.ownerSVGElement ?? element) as unknown as SVGSVGElement;
+    const tryCTM = () => {
+      try {
+        const ctm = element.getScreenCTM?.();
+        if (ctm && typeof (root as any).createSVGPoint === 'function') {
+          const p1 = (root as any).createSVGPoint();
+          p1.x = bx; p1.y = by;
+          const p2 = (root as any).createSVGPoint();
+          p2.x = bx + bw; p2.y = by + bh;
+          const s1 = p1.matrixTransform(ctm);
+          const s2 = p2.matrixTransform(ctm);
+          left = s1.x; top = s1.y; width = Math.abs(s2.x - s1.x); height = Math.abs(s2.y - s1.y);
+        }
+      } catch (_) {}
+    };
+
+    const tryViewBoxScale = () => {
+      try {
+        const rootRect = root?.getBoundingClientRect?.();
+        const vb = root?.getAttribute?.('viewBox');
+        if (rootRect && vb && bw > 0 && bh > 0) {
+          const parts = vb.split(/\s+/).map(parseFloat);
+          if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+            const sx = rootRect.width / parts[2];
+            const sy = rootRect.height / parts[3];
+            width = bw * sx; height = bh * sy;
+            // left/top are not reliable without transforms; leave as rect.left/top if available
+          }
+        }
+      } catch (_) {}
+    };
+
+    if (!(width > 0 && height > 0)) {
+      tryCTM();
+    }
+    if (!(width > 0 && height > 0)) {
+      tryViewBoxScale();
+    }
+
+    // 3) Visibility diagnostics
+    const diag: { isConnected: boolean; hiddenAt?: string; chain?: string[] } = {
+      isConnected: !!(element as unknown as Element).isConnected,
+      chain: [],
+    };
+    try {
+      let node: Element | null = element as unknown as Element;
+      while (node) {
+        const cs = window.getComputedStyle(node as Element);
+        const info = `${(node as Element).tagName.toLowerCase()}#${(node as Element).id || ''}.display=${cs.display}.visibility=${cs.visibility}.opacity=${cs.opacity}`;
+        diag.chain?.push(info);
+        if (!diag.hiddenAt && (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0')) {
+          diag.hiddenAt = info;
+        }
+        node = node.parentElement;
+      }
+    } catch (_) {}
+
+    return {
+      svg: { x: bx, y: by, width: bw, height: bh },
+      screen: { left, top, width, height },
+      visibility: diag,
+    };
   }
 
   private async updateCardHosts(
@@ -1825,21 +2119,21 @@ export class FloorplanElement extends LitElement {
   /***************************************************************************************************************************/
 
   initFloorplanRules(svg: SVGGraphicsElement, config: FloorplanConfig): void {
-    if (!config.rules) return;
-
-    const svgElements = this._querySelectorAll(
-      svg,
-      '*',
-      true
-    ) as SVGGraphicsElement[];
-
+    // Always index SVG elements; needed by both rules and card hosts
+    const svgElements = this._querySelectorAll(svg, '*', true) as SVGGraphicsElement[];
     for (const svgElement of svgElements) {
       if (svgElement.id) {
         this.svgElements[svgElement.id] = svgElement;
       }
     }
 
-    this.initRules(config, svg, svgElements);
+    // Initialize rules only when provided
+    if (config.rules && config.rules.length) {
+      this.initRules(config, svg, svgElements);
+    }
+
+    // Initialize integrated card hosts regardless of rules
+    // Debug prints removed
     this.initCardHosts(svg, config);
   }
 
@@ -2911,6 +3205,95 @@ export class FloorplanElement extends LitElement {
     }
 
     switch (service) {
+      case 'debug_measure': {
+        try {
+          const collected: SVGGraphicsElement[] = [];
+          const seen = new Set<SVGGraphicsElement>();
+
+          const add = (el?: SVGGraphicsElement | null) => {
+            if (el && !seen.has(el)) { seen.add(el); collected.push(el); }
+          };
+
+          const ids: string[] = [];
+          if (Array.isArray((serviceData as any)?.elements)) {
+            ids.push(...(((serviceData as any).elements as string[]) ?? []));
+          }
+          if (typeof (serviceData as any)?.element === 'string') {
+            ids.push(((serviceData as any).element as string));
+          }
+
+          const queryAllSvgs = (selector: string): SVGGraphicsElement[] => {
+            const results: SVGGraphicsElement[] = [];
+            const master = this.svg as unknown as SVGSVGElement | undefined;
+            if (master) {
+              results.push(...(this._querySelectorAll(master, selector, false) as SVGGraphicsElement[]));
+            }
+            // Include all page SVGs if present
+            if (this.pageInfos) {
+              for (const page of Object.values(this.pageInfos)) {
+                const svg = page.svg as unknown as SVGSVGElement | undefined;
+                if (svg) {
+                  results.push(...(this._querySelectorAll(svg, selector, false) as SVGGraphicsElement[]));
+                }
+              }
+            }
+            return results;
+          };
+
+          for (const id of ids) {
+            const escaped = `#${id.replace(/\./g, '\\.')}`;
+            const byQuery = queryAllSvgs(escaped);
+            for (const el of byQuery) add(el);
+            // Fallback: global index
+            const byIndex = this.svgElements[id];
+            add(byIndex);
+          }
+
+          if (!collected.length && typeof (serviceData as any)?.selector === 'string') {
+            const sel = String((serviceData as any).selector);
+            for (const el of queryAllSvgs(sel)) add(el);
+          }
+
+          if (!collected.length && svgElementInfo?.svgElement) {
+            add(svgElementInfo.svgElement);
+          }
+
+          if (!collected.length) {
+            this.logWarning(
+              'FLOORPLAN_ACTION',
+              `floorplan.debug_measure: No target elements found. Use service_data.element/elements or service_data.selector.`
+            );
+            break;
+          }
+
+          const delayMs = Number((serviceData as any)?.delay_ms ?? 50);
+          const retries = Math.max(0, Number((serviceData as any)?.retries ?? 10));
+          const diagnose = Boolean((serviceData as any)?.diagnose);
+
+          const report = (el: SVGGraphicsElement, attempt: number) => {
+            const m = this.measureSvgElementSize(el);
+            const name = el.id || el.tagName;
+            const zero = !(m.screen.width > 0 && m.screen.height > 0);
+            if (zero && attempt < retries) {
+              setTimeout(() => report(el, attempt + 1), delayMs);
+              return;
+            }
+            const extra = diagnose && m.visibility ? ` visible=${m.visibility.isConnected} hiddenAt=${m.visibility.hiddenAt ?? 'none'}` : '';
+            const msg = `debug_measure ${name} svg=(${m.svg.x.toFixed(2)},${m.svg.y.toFixed(2)} ${m.svg.width.toFixed(2)}x${m.svg.height.toFixed(2)}) screen=${m.screen.width.toFixed(2)}x${m.screen.height.toFixed(2)} (attempt ${attempt})${extra}`;
+            this.logInfo('FLOORPLAN_ACTION', msg);
+            try {
+              console.debug('FLOORPLAN_DEBUG_MEASURE', { id: name, attempt, ...m });
+            } catch (_) {}
+          };
+
+          for (const el of collected) {
+            report(el, 0);
+          }
+        } catch (err) {
+          this.logError('FLOORPLAN_ACTION', `floorplan.debug_measure failed: ${(err as Error).message}`);
+        }
+        break;
+      }
       case 'class_toggle':
         targetSvgElements = this.getSvgElementsFromServiceData(
           serviceData,
@@ -3197,31 +3580,22 @@ export class FloorplanElement extends LitElement {
       case 'set_page_list': {
         const setPageListServiceData =
           serviceData ?? actionConfig.service_data;
-        console.log(
-          '[floorplan.set_page_list] Incoming service data:',
-          setPageListServiceData
-        );
+        
 
         const parsedPageLayers = this.parsePageLayerList(
           setPageListServiceData
         );
-        console.log(
-          '[floorplan.set_page_list] Parsed page layers:',
-          parsedPageLayers
-        );
+        
 
         if (!Object.keys(parsedPageLayers).length) {
           this.logWarning(
             'CONFIG',
             'No valid page entries were provided to floorplan.set_page_list.'
           );
-          console.log(
-            '[floorplan.set_page_list] No valid page entries detected.'
-          );
+          
           break;
         }
-        console.log('SHAHZAD: set_page_list stored keys', Object.keys(this.pageLayers||{}));
-        console.log('SHAHZAD: set_page_list layer id set size', this.pageLayerIds ? this.pageLayerIds.size : 0);
+        
       
 
         this.pageLayers = parsedPageLayers;
@@ -3238,22 +3612,16 @@ export class FloorplanElement extends LitElement {
       case 'set_page': {
         if (!Object.keys(this.pageLayers).length) {
           this.logWarning('FLOORPLAN_ACTION','No page list available. Call floorplan.set_page_list before floorplan.set_page.');
-          console.log('SHAHZAD: set_page missing page list');
           break;
         }
         const setPageServiceData = serviceData ?? actionConfig.service_data;
-        console.log('SHAHZAD: set_page service data', setPageServiceData);
         const pageName = this.getPageNameFromServiceData(setPageServiceData);
-        console.log('SHAHZAD: set_page resolved page', pageName);
         if (!pageName) {
           this.logWarning('CONFIG','floorplan.set_page requires a page name to be provided in service data.');
-          console.log('SHAHZAD: set_page missing page name');
           break;
         }
         const ids = this.pageLayers[pageName] || [];
-        console.log('SHAHZAD: set_page layers for page', pageName, ids);
         this.applyPageLayerVisibility(pageName);
-        console.log('SHAHZAD: set_page applied');
         break;
       }
       
@@ -3625,13 +3993,13 @@ export class FloorplanElement extends LitElement {
       }
     }
 
-    console.log('SHAHZAD: applyPageLayerVisibility page', pageName, 'layers', layerIds);
+    
     let found = 0, missing: string[] = [];
     for (const lid of layerIds) {
       const els = this.getLayerElementsById(lid);
       if (els.length) { found += els.length; } else { missing.push(lid); }
     }
-    console.log('SHAHZAD: applyPageLayerVisibility found elements', found, 'missing', missing);
+    
 
     const activeLayerSet = new Set(layerIds);
     this.currentPageName = pageName;
@@ -3761,12 +4129,7 @@ export class FloorplanElement extends LitElement {
   handleEventActionCall(event: Event) {
     const customEvent = event as CustomEvent<FloorplanEventActionCallDetail>;
     const { actionConfig, entityId, svgElementInfo, ruleInfo } = customEvent.detail;
-    console.log('SHAHZAD: action-call', {
-      service: (actionConfig as any).service,
-      entityId,
-      el: (svgElementInfo?.svgElement?.id),
-      rule: (ruleInfo?.rule?.element),
-    });
+    
     actionConfig._is_internal_action_scope = true;
     this.handleActions(actionConfig, entityId, svgElementInfo, ruleInfo);
     //this.callService(actionConfig, entityId, svgElementInfo, ruleInfo);

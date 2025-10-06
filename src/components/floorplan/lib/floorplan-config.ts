@@ -180,6 +180,19 @@ export interface FloorplanCardHostConfig
   container_id?: string;
   entities?: string[];
   variants?: FloorplanCardHostVariantsConfig;
+  /**
+   * How the embedded Lovelace card should fit inside the target rect.
+   * - 'fill' (default): force the card and its ha-card to width/height 100%.
+   * - 'contain': scale the rendered card uniformly to fit within the rect while preserving aspect ratio.
+   * - 'cover': scale the rendered card uniformly to cover the rect entirely (may crop), preserving aspect ratio.
+   * - 'none': do not force/stretch; render at the card's natural size.
+   */
+  fit?: 'fill' | 'contain' | 'cover' | 'none';
+  /**
+   * Optional natural (baseline) size of the embedded card content, used for uniform scaling.
+   * Accepts number (square), string (e.g., "320x320", "320 × 320"), array [w,h], or object {width,height}.
+   */
+  default_size?: number | string | [number, number] | { width: number; height: number };
   foreign_object?: {
     width?: number;
     height?: number;
